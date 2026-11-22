@@ -95,9 +95,9 @@ func (w *Weekly) save() {
 }
 
 // View builds the page: a header with the week and its navigation, then the
-// seven days side by side, raised cards in a recessed tray.
+// seven days side by side as raised cards.
 func (w *Weekly) View(c *ui.Context) {
-	ui.Column(c).Fill().Padding(8, 24, 0, 8).Gap(24).Children(func() {
+	ui.Column(c).Fill().Padding(8, 24, 0, 16).Gap(24).Children(func() {
 		w.header(c)
 		w.days(c)
 	})
@@ -133,10 +133,9 @@ func (w *Weekly) days(c *ui.Context) {
 		today = weekday(w.now())
 	}
 	items := w.Items()
-	// The tray sinks the week into the surface, apart from the header; the
-	// cards rise out of it. Gaps are at least the shadow blur, so shadows
-	// don't meet.
-	mallow.Tray(c, mallow.Large).Row().Grow(1).AlignItems(ui.Stretch).Gap(16).Padding(20).Children(func() {
+	// The cards stand on the surface itself. Gaps are at least the shadow
+	// blur, so shadows don't meet, and the padding leaves them room.
+	ui.Row(c).Grow(1).AlignItems(ui.Stretch).Gap(16).Padding(4, 4, 0, 4).Children(func() {
 		for d := range 7 {
 			w.day(c.Key(d), d, d == today, items)
 		}
