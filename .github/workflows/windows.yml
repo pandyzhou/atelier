@@ -1,62 +1,77 @@
-# Builds the Windows app: an installer and a portable single-file exe.
+# 构建 Windows 版：安装包和单文件便携版。
 #
-# - Push a tag like v0.2.0 (matching "version" in mygo.json): builds both and
-#   publishes them as a GitHub release.
-# - Run it by hand from the Actions tab: builds both and keeps them as the
-#   run's artifacts, without a release.
+# - 推送到 main：构建并发布新版本。版本号自动递增最后一位：mygo.json 的
+#   version 定主次版本（如 0.1.0 → v0.1.1、v0.1.2…），想升主次版本就改它
+#   （改成 0.2.0 则从 v0.2.0 开始）。Release 描述是上一个版本以来的提交描述。
+# - 在 Actions 页面手动运行：只构建，产物留在这次运行的 Artifacts 里，不发布。
 name: Windows
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: write # creating the release and uploading to it
+  contents: write # 创建 Release 和标签
+
+# 两次推送挨得很近时依次运行，免得算出同一个版本号。
+concurrency:
+  group: windows-release
+  cancel-in-progress: false
 
 jobs:
   build:
-    # MyGo needs no cgo, so Linux compiles the Windows app; NSIS makes the
-    # installer there as well.
+    # MyGo 不需要 cgo，Linux 上就能编译 Windows 版，也能用 NSIS 打安装包。
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # 需要全部标签和历史来算版本号、写发布说明
+
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
-      - name: Test
+      - name: 测试
         run: |
           go vet ./...
           go test ./...
 
-      - name: Read the version
+      - name: 计算版本号
         id: version
         run: |
-          v=$(jq -r .version mygo.json)
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-          if [ "$GITHUB_REF_TYPE" = tag ] && [ "v$v" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::mygo.json has version $v but the tag is $GITHUB_REF_NAME"
-            exit 1
+          base=$(jq -r .version mygo.json)        # 如 0.1.0
+          minor=${base%.*}                        # 如 0.1
+          last=$(git tag -l "v$minor.*" --sort=-v:refname | head -n 1)
+          if [ -z "$last" ]; then
+            v=$base
+          else
+            v="$minor.$(( ${last##*.} + 1 ))"
           fi
+          prev=$(git tag -l 'v*' --sort=-v:refname | head -n 1)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "previous=$prev" >> "$GITHUB_OUTPUT"
+          # 打包用这个版本号：安装包的文件名和版本信息都取自 mygo.json。
+          jq --arg v "$v" '.version = $v' mygo.json > mygo.json.tmp && mv mygo.json.tmp mygo.json
+          echo "版本 v$v（上一个版本：${prev:-无}）"
 
-      - name: Install NSIS
+      - name: 安装 NSIS
         run: sudo apt-get update && sudo apt-get install -y nsis
 
-      - name: Build
+      - name: 构建
         run: go tool mygo build -platform windows/amd64
 
-      - name: Package
+      - name: 打包
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           out=build/windows-amd64
           mkdir -p dist
           cp "$out/atelier-setup-$VERSION-amd64.exe" dist/
-          # The app ships as Atelier.exe alone (resourcesExclude keeps the
-          # icon out), so the portable build is that one file.
+          # 程序只有 Atelier.exe 一个文件（resourcesExclude 排除了图标），
+          # 便携版就是它本身。
           if [ "$(cat "$out/.mygo-files")" != "Atelier.exe" ]; then
-            echo "::error::the app ships more than Atelier.exe: $(tr '\n' ' ' < "$out/.mygo-files")"
+            echo "::error::程序除了 Atelier.exe 还有其他文件：$(tr '\n' ' ' < "$out/.mygo-files")"
             exit 1
           fi
           cp "$out/Atelier.exe" "dist/atelier-$VERSION-windows-amd64-portable.exe"
@@ -67,13 +82,28 @@ jobs:
           name: atelier-windows-${{ steps.version.outputs.version }}
           path: dist/*
 
-      - name: Publish the release
-        if: github.ref_type == 'tag'
+      - name: 写发布说明
+        if: github.event_name == 'push'
+        env:
+          PREV: ${{ steps.version.outputs.previous }}
+        run: |
+          range=HEAD
+          [ -n "$PREV" ] && range="$PREV..HEAD"
+          # 每个提交一节：标题作小标题，正文照录，去掉 Co-Authored-By 等署名行。
+          git log --no-merges --reverse --format='%x1f%s%x1e%b' "$range" |
+            awk 'BEGIN { RS = "\037"; FS = "\036" } NF {
+                   printf "### %s\n\n", $1
+                   n = split($2, lines, "\n")
+                   for (i = 1; i <= n; i++)
+                     if (lines[i] !~ /^(Co-Authored-By|Signed-off-by):/) printf "%s\n", lines[i]
+                   printf "\n"
+                 }' | cat -s > notes.md
+          cat notes.md
+
+      - name: 发布 Release
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.version.outputs.version }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
-          fi
+          gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "$TAG" --notes-file notes.md
