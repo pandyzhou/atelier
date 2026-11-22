@@ -46,13 +46,16 @@ func (a *app) current() feature.Feature {
 
 func (a *app) view(c *ui.Context) {
 	c.SetTheme(theme.Theme())
-	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
-		ui.Column(c).Width(208).Shrink(0).Padding(32, 20).Gap(32).Children(func() {
+	ui.Row(c).Fill().AlignItems(ui.Stretch).Padding(24, 0, 24, 24).Children(func() {
+		// The sidebar is a raised panel, set apart from the page beside it.
+		side := ui.Column(c).Width(184).Shrink(0).Padding(28, 16).Gap(24).Radius(theme.RadiusCard)
+		theme.Raised(side, theme.Large).Children(func() {
 			ui.Column(c).PaddingX(12).Gap(4).Children(func() {
 				ui.Text(c, "Atelier").FontSize(20).FontWeight(600).TextColor(theme.Text)
 				ui.Text(c, "个人工作室").FontSize(12).TextColor(theme.Muted)
 			})
-			ui.Column(c).Gap(16).Role(ui.RoleTabList).Label("功能").Children(func() {
+			theme.Groove(c).MarginX(4)
+			ui.Column(c).Gap(12).Role(ui.RoleTabList).Label("功能").Children(func() {
 				for _, f := range a.features {
 					a.navItem(c.Key(f.ID()), f)
 				}
@@ -98,8 +101,8 @@ func main() {
 	mygo.App.WhenReady(func() {
 		mygo.NewWindow(mygo.WindowOptions{
 			Title:     "Atelier",
-			Width:     1200,
-			Height:    760,
+			Width:     1280,
+			Height:    800,
 			MinWidth:  860,
 			MinHeight: 520,
 			StateKey:  "main",

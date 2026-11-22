@@ -16,7 +16,7 @@ import (
 // would. An empty store keeps nothing on disk.
 func TestWeeklyAddAndCheck(t *testing.T) {
 	a := newApp(store.Open(""))
-	tt := ui.NewTester(a.view, 1200, 760)
+	tt := ui.NewTester(a.view, 1280, 800)
 	if !tt.HasText("每周清单") {
 		t.Fatalf("sidebar missing the weekly checklist, texts %q", tt.Texts())
 	}
@@ -51,7 +51,7 @@ func TestScreenshot(t *testing.T) {
 		t.Skip("set ATELIER_SCREENSHOT to write a screenshot")
 	}
 	a := newApp(store.Open(""))
-	tt := ui.NewTester(a.view, 1200, 760)
+	tt := ui.NewTester(a.view, 1280, 800)
 	if os.Getenv("ATELIER_SCREENSHOT_SCALE") == "2" {
 		tt.SetScale(2)
 	}

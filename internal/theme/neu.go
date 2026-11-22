@@ -64,6 +64,14 @@ func Recessed(e ui.Element, d Depth) ui.Element {
 		InsetShadow(-o, -o, 2*o, 0, Light)
 }
 
+// Groove is a divider pressed into the surface: a thin channel, the way soft
+// UI separates parts without a line of another color.
+func Groove(c *ui.Context) ui.Element {
+	return ui.Box(c).Height(4).Shrink(0).Radius(2).Background(Base).
+		InsetShadow(1, 1, 2, 0, Dark).
+		InsetShadow(-1, -1, 2, 0, Light)
+}
+
 // Soft fades shadow and color changes over 200 ms, as the spec's
 // transitions do.
 func Soft(e ui.Element) ui.Element {

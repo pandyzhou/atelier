@@ -94,9 +94,9 @@ func (w *Weekly) save() {
 }
 
 // View builds the page: a header with the week and its navigation, then the
-// seven days side by side, each a raised card.
+// seven days side by side, raised cards in a recessed tray.
 func (w *Weekly) View(c *ui.Context) {
-	ui.Column(c).Fill().Padding(32, 32, 32, 16).Gap(32).Children(func() {
+	ui.Column(c).Fill().Padding(8, 24, 0, 8).Gap(24).Children(func() {
 		w.header(c)
 		w.days(c)
 	})
@@ -132,8 +132,11 @@ func (w *Weekly) days(c *ui.Context) {
 		today = weekday(w.now())
 	}
 	items := w.Items()
-	// The gap is at least the cards' shadow blur, so their shadows don't meet.
-	ui.Row(c).Grow(1).AlignItems(ui.Stretch).Gap(16).Children(func() {
+	// The tray sinks the week into the surface, apart from the header; the
+	// cards rise out of it. Gaps are at least the shadow blur, so shadows
+	// don't meet.
+	tray := ui.Row(c).Grow(1).AlignItems(ui.Stretch).Gap(16).Padding(20).Radius(32)
+	theme.Recessed(tray, theme.Large).Children(func() {
 		for d := range 7 {
 			w.day(c.Key(d), d, d == today, items)
 		}
@@ -159,7 +162,8 @@ func (w *Weekly) day(c *ui.Context, d int, isToday bool, items []*Item) {
 				ui.Textf(c, "%d", date.Day()).FontSize(16).FontWeight(600).TextColor(numColor)
 			})
 		})
-		ui.Scroll(c).Grow(1).Padding(4, 12, 12, 12).Gap(4).Children(func() {
+		theme.Groove(c).MarginX(12)
+		ui.Scroll(c).Grow(1).Padding(12, 12, 12, 12).Gap(4).Children(func() {
 			for _, it := range items {
 				if it.Day == d {
 					w.item(c.Key(it.ID), it)
