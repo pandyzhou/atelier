@@ -10,8 +10,9 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/pandyzhou/mallow"
+
 	"github.com/pandyzhou/atelier/internal/store"
-	"github.com/pandyzhou/atelier/internal/theme"
 )
 
 // Item is one thing to do on one day.
@@ -107,19 +108,19 @@ func (w *Weekly) header(c *ui.Context) {
 	sunday := w.monday.AddDate(0, 0, 6)
 	ui.Row(c).AlignItems(ui.End).Gap(16).Children(func() {
 		ui.Column(c).Grow(1).Gap(8).Children(func() {
-			ui.Text(c, "WEEKLY").FontSize(12).FontWeight(500).LetterSpacing(1).TextColor(theme.Muted)
-			ui.Textf(c, "%d 年 · 第 %d 周", year, week).FontSize(28).FontWeight(600).TextColor(theme.Text)
+			mallow.Label(c, "WEEKLY").LetterSpacing(1)
+			ui.Textf(c, "%d 年 · 第 %d 周", year, week).FontSize(28).FontWeight(600).TextColor(mallow.Text)
 			ui.Textf(c, "%d月%d日 — %d月%d日", w.monday.Month(), w.monday.Day(), sunday.Month(), sunday.Day()).
-				FontSize(14).TextColor(theme.Muted)
+				FontSize(14).TextColor(mallow.Muted)
 		})
-		ui.Row(c).Gap(16).Children(func() {
-			if theme.Button(c, "‹").Label("上一周").Tooltip("上一周").Clicked() {
+		ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
+			if mallow.IconButton(c, "上一周", mallow.GlyphChevronLeft, mallow.IconButtonStyle{Size: 36}).Clicked() {
 				w.monday = w.monday.AddDate(0, 0, -7)
 			}
-			if theme.Button(c, "本周").Clicked() {
+			if mallow.Button(c, "本周").Clicked() {
 				w.monday = mondayOf(w.now())
 			}
-			if theme.Button(c, "›").Label("下一周").Tooltip("下一周").Clicked() {
+			if mallow.IconButton(c, "下一周", mallow.GlyphChevronRight, mallow.IconButtonStyle{Size: 36}).Clicked() {
 				w.monday = w.monday.AddDate(0, 0, 7)
 			}
 		})
@@ -135,8 +136,7 @@ func (w *Weekly) days(c *ui.Context) {
 	// The tray sinks the week into the surface, apart from the header; the
 	// cards rise out of it. Gaps are at least the shadow blur, so shadows
 	// don't meet.
-	tray := ui.Row(c).Grow(1).AlignItems(ui.Stretch).Gap(16).Padding(20).Radius(32)
-	theme.Recessed(tray, theme.Large).Children(func() {
+	mallow.Tray(c, mallow.Large).Row().Grow(1).AlignItems(ui.Stretch).Gap(16).Padding(20).Children(func() {
 		for d := range 7 {
 			w.day(c.Key(d), d, d == today, items)
 		}
@@ -145,33 +145,31 @@ func (w *Weekly) days(c *ui.Context) {
 
 func (w *Weekly) day(c *ui.Context, d int, isToday bool, items []*Item) {
 	date := w.monday.AddDate(0, 0, d)
-	card := ui.Column(c).Grow(1).MinWidth(0).Radius(theme.RadiusCard).PaddingY(8)
-	theme.Raised(card, theme.Medium).Children(func() {
+	mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0).PaddingY(8).Children(func() {
 		// The day's heading: its name above, the date below; today's date in
 		// an accent disc.
 		ui.Row(c).Padding(12, 16, 8, 16).AlignItems(ui.Center).Gap(8).Children(func() {
-			name := ui.Text(c, dayNames[d]).Grow(1).FontSize(12).FontWeight(500).TextColor(theme.Muted)
-			num := ui.Box(c).Size(32, 32).Radius(theme.RadiusPill).AlignItems(ui.Center).Justify(ui.Center)
-			numColor := theme.Text
+			name := ui.Text(c, dayNames[d]).Grow(1).FontSize(12).FontWeight(500).TextColor(mallow.Muted)
+			num := ui.Box(c).Size(32, 32).Radius(mallow.RadiusPill).AlignItems(ui.Center).Justify(ui.Center)
+			numColor := mallow.Text
 			if isToday {
-				name.TextColor(theme.Accent)
-				num.Background(theme.Accent)
-				numColor = theme.OnAccent
+				name.TextColor(mallow.Accent)
+				num.Background(mallow.Accent)
+				numColor = mallow.OnAccent
 			}
 			num.Children(func() {
 				ui.Textf(c, "%d", date.Day()).FontSize(16).FontWeight(600).TextColor(numColor)
 			})
 		})
-		theme.Groove(c).MarginX(12)
+		mallow.Groove(c).MarginX(12)
 		ui.Scroll(c).Grow(1).Padding(12, 12, 12, 12).Gap(4).Children(func() {
 			for _, it := range items {
 				if it.Day == d {
 					w.item(c.Key(it.ID), it)
 				}
 			}
-			input := ui.TextInput(c, &w.drafts[d]).Placeholder("+ 添加").Label(dayNames[d]+"添加事项").
-				Radius(theme.RadiusSmall).Padding(8, 10).Margin(4, 0, 0, 0)
-			theme.Recessed(input, 3)
+			input := mallow.TextInput(c, &w.drafts[d]).Placeholder("+ 添加").Label(dayNames[d]+"添加事项").
+				Padding(8, 10).Margin(4, 0, 0, 0)
 			if input.Submitted() {
 				w.Add(d, w.drafts[d])
 				w.drafts[d] = ""
@@ -180,50 +178,22 @@ func (w *Weekly) day(c *ui.Context, d int, isToday bool, items []*Item) {
 	})
 }
 
-// item is one thing to do: a soft check disc and its text, the whole row a
-// check box; a delete button floats over its top right corner while the item
-// is hovered, so the text keeps its width and does not wrap anew.
+// item is one thing to do, a mallow check; a delete button floats over its
+// top right corner while the item is hovered, so the text keeps its width
+// and does not wrap anew.
 func (w *Weekly) item(c *ui.Context, it *Item) {
 	wrap := ui.Box(c)
 	hovered := wrap.Hovered()
 	wrap.Children(func() {
-		row := ui.ButtonBase(c).Role(ui.RoleCheckBox).Label(it.Text).Checked(it.Done).
-			Padding(6, 4).Gap(8).Row().AlignItems(ui.Start).
-			Radius(theme.RadiusSmall).Cursor(ui.CursorPointer)
-		if row.Clicked() {
-			it.Done = !it.Done
+		if mallow.Check(c, &it.Done, it.Text).Changed() {
 			w.save()
 		}
-		row.Children(func() {
-			disc := ui.Box(c).Size(18, 18).Shrink(0).Margin(1, 0, 0, 0).Radius(theme.RadiusPill).
-				AlignItems(ui.Center).Justify(ui.Center)
-			if it.Done {
-				disc.Background(theme.Accent).Shadow(2, 2, 4, 0, theme.Dark).Shadow(-2, -2, 4, 0, theme.Light)
-			} else {
-				theme.Recessed(disc, 2)
-			}
-			theme.Soft(disc).Children(func() {
-				if it.Done {
-					ui.Text(c, "✓").FontSize(11).FontWeight(600).TextColor(theme.OnAccent)
-				}
-			})
-			text := ui.Text(c, it.Text).Grow(1).MinWidth(0).FontSize(14).TextColor(theme.Text)
-			if it.Done {
-				text.TextColor(theme.Muted).Strikethrough()
-			}
-		})
 		if hovered {
-			del := ui.ButtonBase(c).Label("删除").Tooltip("删除").Size(24, 24).
-				Absolute().Top(3).Right(0).Background(theme.Base).
-				Radius(theme.RadiusPill).AlignItems(ui.Center).Justify(ui.Center).Cursor(ui.CursorPointer)
-			color := theme.Muted
-			if del.Hovered() {
-				color = theme.Danger
-			}
+			del := mallow.GhostIconButton(c, "删除", mallow.GlyphClose, mallow.IconButtonStyle{Danger: true}).
+				Absolute().Top(3).Right(0)
 			if del.Clicked() {
 				w.Remove(it.ID)
 			}
-			del.Children(func() { ui.Text(c, "×").FontSize(15).TextColor(color) })
 		}
 	})
 }

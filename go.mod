@@ -4,7 +4,10 @@ go 1.27.4
 
 tool github.com/egoist/mygo/cmd/mygo
 
-require github.com/egoist/mygo v0.10.0
+require (
+	github.com/egoist/mygo v0.10.0
+	github.com/pandyzhou/mallow v0.1.0
+)
 
 require (
 	github.com/ProtonMail/go-crypto v1.4.1 // indirect

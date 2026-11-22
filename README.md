@@ -1,6 +1,6 @@
 # Atelier
 
-个人综合桌面应用，用 [MyGo](https://github.com/egoist/mygo) 原生 UI 编写：界面全由 Go 代码描述并在 GPU 上绘制，不依赖浏览器内核，打包后是一个只有几 MB 的可执行文件。
+个人综合桌面应用，用 [MyGo](https://github.com/egoist/mygo) 原生 UI 编写，界面组件来自自己维护的新拟态组件库 [mallow](https://github.com/pandyzhou/mallow)：界面全由 Go 代码描述并在 GPU 上绘制，不依赖浏览器内核，打包后是一个只有几 MB 的可执行文件。
 
 目前的功能：
 
@@ -9,6 +9,8 @@
 ## 开发
 
 需要 Go 1.27.3 或更高版本。
+
+同时修改 mallow 时，把它克隆到旁边的 `../mallow`，再执行 `go work init . ../mallow`：本地编译就会直接用 mallow 的源码（`go.work` 不提交）。改完 mallow 后先给它打新版本标签，再在这里 `go get github.com/pandyzhou/mallow@<新版本>`，GitHub 上的构建用的是 `go.mod` 里锁定的版本。
 
 ```sh
 go tool mygo dev     # 开发模式运行，改代码后自动重启
@@ -38,7 +40,6 @@ GitHub Actions（`.github/workflows/windows.yml`）会打两个 Windows 包：�
 main.go                      外壳：侧边栏 + 当前功能页面，在 features() 里注册功能
 internal/feature/            Feature 接口：ID、Title、View
 internal/store/              每个功能一个 JSON 文件的存储
-internal/theme/              新拟态（Neumorphism）主题与凸起/凹陷样式
 internal/features/weekly/    每周清单
 ```
 

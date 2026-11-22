@@ -55,8 +55,23 @@ jobs:
           jq --arg v "$v" '.version = $v' mygo.json > mygo.json.tmp && mv mygo.json.tmp mygo.json
           echo "版本 v$v（上一个版本：${prev:-无}）"
 
+      # NSIS 的 .deb 安装包放进缓存：命中时直接 dpkg 安装，省掉 apt-get update
+      # 和下载。换了 runner 系统版本就改 key 里的 ubuntu 版本号。
+      - name: 缓存 NSIS
+        uses: actions/cache@v6
+        with:
+          path: ~/nsis-debs
+          key: nsis-debs-${{ runner.os }}-ubuntu26-v1
+
       - name: 安装 NSIS
-        run: sudo apt-get update && sudo apt-get install -y nsis
+        run: |
+          if ! ls ~/nsis-debs/*.deb > /dev/null 2>&1; then
+            sudo apt-get update
+            mkdir -p ~/nsis-debs
+            (cd ~/nsis-debs && apt-get download nsis nsis-common)
+          fi
+          sudo dpkg -i ~/nsis-debs/*.deb
+          makensis -VERSION
 
       - name: 构建
         run: go tool mygo build -platform windows/amd64
