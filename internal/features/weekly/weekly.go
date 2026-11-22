@@ -94,33 +94,32 @@ func (w *Weekly) save() {
 }
 
 // View builds the page: a header with the week and its navigation, then the
-// seven days side by side.
+// seven days side by side, each a raised card.
 func (w *Weekly) View(c *ui.Context) {
-	ui.Column(c).Fill().Padding(28, 32, 24, 32).Gap(20).Children(func() {
+	ui.Column(c).Fill().Padding(32, 32, 32, 16).Gap(32).Children(func() {
 		w.header(c)
 		w.days(c)
 	})
 }
 
 func (w *Weekly) header(c *ui.Context) {
-	t := c.Theme()
 	year, week := w.monday.ISOWeek()
 	sunday := w.monday.AddDate(0, 0, 6)
 	ui.Row(c).AlignItems(ui.End).Gap(16).Children(func() {
-		ui.Column(c).Grow(1).Gap(6).Children(func() {
-			ui.Text(c, "WEEKLY").FontSize(11).LetterSpacing(2).TextColor(t.Accent).Bold()
-			ui.Textf(c, "%d 年 · 第 %d 周", year, week).FontSize(30).Bold()
+		ui.Column(c).Grow(1).Gap(8).Children(func() {
+			ui.Text(c, "WEEKLY").FontSize(12).FontWeight(500).LetterSpacing(1).TextColor(theme.Muted)
+			ui.Textf(c, "%d 年 · 第 %d 周", year, week).FontSize(28).FontWeight(600).TextColor(theme.Text)
 			ui.Textf(c, "%d月%d日 — %d月%d日", w.monday.Month(), w.monday.Day(), sunday.Month(), sunday.Day()).
-				TextColor(t.TextMuted)
+				FontSize(14).TextColor(theme.Muted)
 		})
-		ui.Row(c).Gap(6).Children(func() {
-			if ui.Button(c, "‹").Label("上一周").Tooltip("上一周").Clicked() {
+		ui.Row(c).Gap(16).Children(func() {
+			if theme.Button(c, "‹").Label("上一周").Tooltip("上一周").Clicked() {
 				w.monday = w.monday.AddDate(0, 0, -7)
 			}
-			if ui.Button(c, "本周").Clicked() {
+			if theme.Button(c, "本周").Clicked() {
 				w.monday = mondayOf(w.now())
 			}
-			if ui.Button(c, "›").Label("下一周").Tooltip("下一周").Clicked() {
+			if theme.Button(c, "›").Label("下一周").Tooltip("下一周").Clicked() {
 				w.monday = w.monday.AddDate(0, 0, 7)
 			}
 		})
@@ -133,40 +132,42 @@ func (w *Weekly) days(c *ui.Context) {
 		today = weekday(w.now())
 	}
 	items := w.Items()
-	ui.Row(c).Grow(1).AlignItems(ui.Stretch).
-		BorderWidth(1, 0, 1, 1).BorderColor(theme.Rule).
-		Children(func() {
-			for d := range 7 {
-				w.day(c.Key(d), d, d == today, items)
-			}
-		})
+	// The gap is at least the cards' shadow blur, so their shadows don't meet.
+	ui.Row(c).Grow(1).AlignItems(ui.Stretch).Gap(16).Children(func() {
+		for d := range 7 {
+			w.day(c.Key(d), d, d == today, items)
+		}
+	})
 }
 
 func (w *Weekly) day(c *ui.Context, d int, isToday bool, items []*Item) {
-	t := c.Theme()
 	date := w.monday.AddDate(0, 0, d)
-	col := ui.Column(c).Grow(1).MinWidth(0).BorderWidth(0, 1, 0, 0).BorderColor(theme.Rule)
-	if isToday {
-		col.Background(theme.Today)
-	}
-	col.Children(func() {
-		// The day's heading: its name on the left, the date large on the right.
-		ui.Row(c).Padding(10, 12).AlignItems(ui.End).
-			BorderWidth(0, 0, 1, 0).BorderColor(theme.Rule).Children(func() {
-			name := ui.Text(c, dayNames[d]).Grow(1).FontSize(13).TextColor(t.TextMuted)
+	card := ui.Column(c).Grow(1).MinWidth(0).Radius(theme.RadiusCard).PaddingY(8)
+	theme.Raised(card, theme.Medium).Children(func() {
+		// The day's heading: its name above, the date below; today's date in
+		// an accent disc.
+		ui.Row(c).Padding(12, 16, 8, 16).AlignItems(ui.Center).Gap(8).Children(func() {
+			name := ui.Text(c, dayNames[d]).Grow(1).FontSize(12).FontWeight(500).TextColor(theme.Muted)
+			num := ui.Box(c).Size(32, 32).Radius(theme.RadiusPill).AlignItems(ui.Center).Justify(ui.Center)
+			numColor := theme.Text
 			if isToday {
-				name.TextColor(t.Accent).Bold()
+				name.TextColor(theme.Accent)
+				num.Background(theme.Accent)
+				numColor = theme.Light
 			}
-			ui.Textf(c, "%d", date.Day()).FontSize(22)
+			num.Children(func() {
+				ui.Textf(c, "%d", date.Day()).FontSize(16).FontWeight(600).TextColor(numColor)
+			})
 		})
-		ui.Scroll(c).Grow(1).Padding(8, 10).Gap(4).Children(func() {
+		ui.Scroll(c).Grow(1).Padding(4, 12, 12, 12).Gap(4).Children(func() {
 			for _, it := range items {
 				if it.Day == d {
 					w.item(c.Key(it.ID), it)
 				}
 			}
-			input := ui.TextInput(c, &w.drafts[d]).Placeholder("+ 添加").Label(dayNames[d] + "添加事项").
-				Background(ui.Transparent).BorderColor(ui.Transparent)
+			input := ui.TextInput(c, &w.drafts[d]).Placeholder("+ 添加").Label(dayNames[d]+"添加事项").
+				Radius(theme.RadiusSmall).Padding(8, 10).Margin(4, 0, 0, 0)
+			theme.Recessed(input, 3)
 			if input.Submitted() {
 				w.Add(d, w.drafts[d])
 				w.drafts[d] = ""
@@ -175,22 +176,50 @@ func (w *Weekly) day(c *ui.Context, d int, isToday bool, items []*Item) {
 	})
 }
 
+// item is one thing to do: a soft check disc and its text, the whole row a
+// check box; a delete button floats over its top right corner while the item
+// is hovered, so the text keeps its width and does not wrap anew.
 func (w *Weekly) item(c *ui.Context, it *Item) {
-	t := c.Theme()
-	row := ui.Row(c).AlignItems(ui.Start).Gap(4)
-	row.Children(func() {
-		box := ui.Checkbox(c, &it.Done, it.Text).Grow(1).MinWidth(0)
-		if it.Done {
-			box.TextColor(t.TextMuted).Strikethrough()
-		}
-		if box.Changed() {
+	wrap := ui.Box(c)
+	hovered := wrap.Hovered()
+	wrap.Children(func() {
+		row := ui.ButtonBase(c).Role(ui.RoleCheckBox).Label(it.Text).Checked(it.Done).
+			Padding(6, 4).Gap(8).Row().AlignItems(ui.Start).
+			Radius(theme.RadiusSmall).Cursor(ui.CursorPointer)
+		if row.Clicked() {
+			it.Done = !it.Done
 			w.save()
 		}
-		if row.Hovered() {
-			if ui.Button(c, "×").Label("删除").Tooltip("删除").Padding(0, 6).
-				Background(ui.Transparent).BorderColor(ui.Transparent).TextColor(t.TextMuted).Clicked() {
+		row.Children(func() {
+			disc := ui.Box(c).Size(18, 18).Shrink(0).Margin(1, 0, 0, 0).Radius(theme.RadiusPill).
+				AlignItems(ui.Center).Justify(ui.Center)
+			if it.Done {
+				disc.Background(theme.Accent).Shadow(2, 2, 4, 0, theme.Dark).Shadow(-2, -2, 4, 0, theme.Light)
+			} else {
+				theme.Recessed(disc, 2)
+			}
+			theme.Soft(disc).Children(func() {
+				if it.Done {
+					ui.Text(c, "✓").FontSize(11).FontWeight(600).TextColor(theme.Light)
+				}
+			})
+			text := ui.Text(c, it.Text).Grow(1).MinWidth(0).FontSize(14).TextColor(theme.Text)
+			if it.Done {
+				text.TextColor(theme.Muted).Strikethrough()
+			}
+		})
+		if hovered {
+			del := ui.ButtonBase(c).Label("删除").Tooltip("删除").Size(24, 24).
+				Absolute().Top(3).Right(0).Background(theme.Base).
+				Radius(theme.RadiusPill).AlignItems(ui.Center).Justify(ui.Center).Cursor(ui.CursorPointer)
+			color := theme.Muted
+			if del.Hovered() {
+				color = theme.Danger
+			}
+			if del.Clicked() {
 				w.Remove(it.ID)
 			}
+			del.Children(func() { ui.Text(c, "×").FontSize(15).TextColor(color) })
 		}
 	})
 }

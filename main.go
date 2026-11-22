@@ -45,27 +45,47 @@ func (a *app) current() feature.Feature {
 }
 
 func (a *app) view(c *ui.Context) {
-	c.SetTheme(theme.Paper())
-	t := c.Theme()
+	c.SetTheme(theme.Theme())
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
-		ui.Column(c).Width(200).Shrink(0).Padding(24, 12).Gap(20).
-			Background(theme.Sidebar).BorderWidth(0, 1, 0, 0).BorderColor(theme.Rule).
-			Children(func() {
-				ui.Column(c).PaddingX(8).Gap(2).Children(func() {
-					ui.Text(c, "Atelier").FontSize(20).Bold()
-					ui.Text(c, "个人工作室").FontSize(12).TextColor(t.TextMuted)
-				})
-				ui.Sidebar(c, &a.selected, func() {
-					for _, f := range a.features {
-						ui.SidebarItem(c.Key(f.ID()), f.ID(), nil, f.Title())
-					}
-				}).Grow(1).Background(ui.Transparent).Label("功能")
+		ui.Column(c).Width(208).Shrink(0).Padding(32, 20).Gap(32).Children(func() {
+			ui.Column(c).PaddingX(12).Gap(4).Children(func() {
+				ui.Text(c, "Atelier").FontSize(20).FontWeight(600).TextColor(theme.Text)
+				ui.Text(c, "个人工作室").FontSize(12).TextColor(theme.Muted)
 			})
+			ui.Column(c).Gap(16).Role(ui.RoleTabList).Label("功能").Children(func() {
+				for _, f := range a.features {
+					a.navItem(c.Key(f.ID()), f)
+				}
+			})
+		})
 		ui.Column(c).Grow(1).MinWidth(0).Children(func() {
 			if f := a.current(); f != nil {
 				f.View(c.Key(f.ID()))
 			}
 		})
+	})
+}
+
+// navItem is a feature in the sidebar: recessed while chosen, raised a little
+// while hovered, flat otherwise.
+func (a *app) navItem(c *ui.Context, f feature.Feature) {
+	chosen := f.ID() == a.selected
+	item := ui.ButtonBase(c).Role(ui.RoleTab).Label(f.Title()).AccessSelected(chosen).
+		Padding(12, 16).Radius(theme.RadiusControl).Cursor(ui.CursorPointer)
+	switch {
+	case chosen:
+		theme.Recessed(item, theme.Small)
+	case item.Hovered():
+		theme.Raised(item, theme.Small)
+	}
+	if item.Clicked() {
+		a.selected = f.ID()
+	}
+	theme.Soft(item).Children(func() {
+		label := ui.Text(c, f.Title()).FontSize(14).TextColor(theme.Muted)
+		if chosen {
+			label.TextColor(theme.Accent).FontWeight(500)
+		}
 	})
 }
 

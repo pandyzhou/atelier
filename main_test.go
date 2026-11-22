@@ -4,6 +4,7 @@ import (
 	"image/png"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -51,6 +52,9 @@ func TestScreenshot(t *testing.T) {
 	}
 	a := newApp(store.Open(""))
 	tt := ui.NewTester(a.view, 1200, 760)
+	if os.Getenv("ATELIER_SCREENSHOT_SCALE") == "2" {
+		tt.SetScale(2)
+	}
 	for _, it := range []struct {
 		day  string
 		text string
@@ -64,10 +68,13 @@ func TestScreenshot(t *testing.T) {
 		tt.Type(it.text)
 		tt.Key(0, ui.KeyEnter)
 	}
-	if err := tt.Click("写周报"); err != nil {
-		t.Fatal(err)
+	for _, done := range []string{"写周报", "修 bug"} {
+		if err := tt.Click(done); err != nil {
+			t.Fatal(err)
+		}
 	}
-	tt.Frame()
+	// Let the 200 ms transitions finish before taking the picture.
+	tt.Advance(time.Second)
 	f, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)

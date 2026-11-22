@@ -41,7 +41,7 @@ GitHub Actions（`.github/workflows/windows.yml`）会打两个 Windows 包：�
 main.go                      外壳：侧边栏 + 当前功能页面，在 features() 里注册功能
 internal/feature/            Feature 接口：ID、Title、View
 internal/store/              每个功能一个 JSON 文件的存储
-internal/theme/              纸张风格主题
+internal/theme/              新拟态（Neumorphism）主题与凸起/凹陷样式
 internal/features/weekly/    每周清单
 ```
 
