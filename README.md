@@ -24,7 +24,7 @@ ATELIER_SCREENSHOT=shot.png go test -run Screenshot .
 
 ## 发布
 
-GitHub Actions（`.github/workflows/windows.yml`）会打两个 Windows 包：安装包 `atelier-setup-<版本>-amd64.exe`，以及便携版 `atelier-<版本>-windows-amd64-portable.zip`。
+GitHub Actions（`.github/workflows/windows.yml`）会打两个 Windows 包：安装包 `atelier-setup-<版本>-amd64.exe`，以及便携版 `atelier-<版本>-windows-amd64-portable.exe`（单文件，双击即可运行）。
 
 - 发布新版本：先改 `mygo.json` 里的 `version`，提交后推送同名标签，Actions 会构建并发布到 Releases：
   ```sh

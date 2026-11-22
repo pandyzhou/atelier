@@ -1,4 +1,4 @@
-# Builds the Windows app: an installer and a portable zip.
+# Builds the Windows app: an installer and a portable single-file exe.
 #
 # - Push a tag like v0.2.0 (matching "version" in mygo.json): builds both and
 #   publishes them as a GitHub release.
@@ -53,13 +53,13 @@ jobs:
           out=build/windows-amd64
           mkdir -p dist
           cp "$out/atelier-setup-$VERSION-amd64.exe" dist/
-          # The portable zip holds the files the app ships with, listed in
-          # .mygo-files, inside an Atelier folder.
-          mkdir -p portable/Atelier
-          while IFS= read -r f; do
-            [ -n "$f" ] && cp -r "$out/$f" portable/Atelier/
-          done < "$out/.mygo-files"
-          (cd portable && zip -r "../dist/atelier-$VERSION-windows-amd64-portable.zip" Atelier)
+          # The app ships as Atelier.exe alone (resourcesExclude keeps the
+          # icon out), so the portable build is that one file.
+          if [ "$(cat "$out/.mygo-files")" != "Atelier.exe" ]; then
+            echo "::error::the app ships more than Atelier.exe: $(tr '\n' ' ' < "$out/.mygo-files")"
+            exit 1
+          fi
+          cp "$out/Atelier.exe" "dist/atelier-$VERSION-windows-amd64-portable.exe"
           ls -la dist
 
       - uses: actions/upload-artifact@v7
