@@ -1,7 +1,8 @@
 // Package theme holds Atelier's look: neumorphism (soft UI). Every element is
 // the color of the background; a light from the top left gives raised ones a
-// white highlight above and a grey shadow below, and recessed ones the same
-// pair inside. No borders, large radii, one blurple accent.
+// highlight above and a shadow below, and recessed ones the same pair inside.
+// No borders, large radii, one blurple accent. It comes in a light and a dark
+// palette; Use switches between them.
 //
 // Spec: https://www.stylekit.top/zh/styles/neumorphism
 package theme
@@ -12,23 +13,84 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-var (
+// Palette is the colors of one variant of the look.
+type Palette struct {
+	IsDark bool
 	// Base is the color of the background and of every element on it.
-	Base = ui.Hex("#e0e5ec")
+	Base ui.Color
 	// Dark is the shadow on the side away from the light; Light the highlight.
-	Dark  = ui.Hex("#b8bcc2")
-	Light = ui.Hex("#ffffff")
-
-	Text  = ui.Hex("#3d4451")
-	Muted = ui.Hex("#6b7280")
-
+	Dark, Light ui.Color
+	Text, Muted ui.Color
 	// Accent marks the primary action and what is chosen, on buttons and
-	// icons only. Danger is for destructive actions, Success for what went
-	// well.
-	Accent  = ui.Hex("#6d5dfc")
-	Danger  = ui.Hex("#ff6b6b")
-	Success = ui.Hex("#4ecdc4")
+	// icons only; OnAccent is text and marks on it. Danger is for
+	// destructive actions, Success for what went well.
+	Accent, OnAccent ui.Color
+	Danger, Success  ui.Color
+}
+
+// LightPalette is the spec's own palette.
+var LightPalette = Palette{
+	Base:     ui.Hex("#e0e5ec"),
+	Dark:     ui.Hex("#b8bcc2"),
+	Light:    ui.Hex("#ffffff"),
+	Text:     ui.Hex("#3d4451"),
+	Muted:    ui.Hex("#6b7280"),
+	Accent:   ui.Hex("#6d5dfc"),
+	OnAccent: ui.Hex("#ffffff"),
+	Danger:   ui.Hex("#ff6b6b"),
+	Success:  ui.Hex("#4ecdc4"),
+}
+
+// DarkPalette carries the same light into a dim room: a charcoal surface, a
+// near-black shadow and a highlight only a little lighter than the surface,
+// as white would glare; text and accent are lifted to keep their contrast.
+var DarkPalette = Palette{
+	IsDark:   true,
+	Base:     ui.Hex("#2a2d33"),
+	Dark:     ui.Hex("#1b1d21"),
+	Light:    ui.Hex("#393d44"),
+	Text:     ui.Hex("#dde1e7"),
+	Muted:    ui.Hex("#8d939d"),
+	Accent:   ui.Hex("#8b7dff"),
+	OnAccent: ui.Hex("#ffffff"),
+	Danger:   ui.Hex("#ff7b7b"),
+	Success:  ui.Hex("#5ad8cf"),
+}
+
+// The colors of the palette in use, which Use sets; read them while building
+// a view.
+var (
+	Base, Dark, Light, Text, Muted ui.Color
+	Accent, OnAccent               ui.Color
+	Danger, Success                ui.Color
+	isDark                         bool
 )
+
+func init() { Use(LightPalette) }
+
+// Use makes p the palette in use.
+func Use(p Palette) {
+	Base, Dark, Light, Text, Muted = p.Base, p.Dark, p.Light, p.Text, p.Muted
+	Accent, OnAccent, Danger, Success = p.Accent, p.OnAccent, p.Danger, p.Success
+	isDark = p.IsDark
+}
+
+// Mode is the appearance the user chose.
+type Mode string
+
+const (
+	ModeSystem Mode = "system" // follow the system's light or dark appearance
+	ModeLight  Mode = "light"
+	ModeDark   Mode = "dark"
+)
+
+// PaletteFor returns the palette of mode, given whether the system is dark.
+func PaletteFor(mode Mode, systemDark bool) Palette {
+	if mode == ModeDark || (mode != ModeLight && systemDark) {
+		return DarkPalette
+	}
+	return LightPalette
+}
 
 // Radii.
 const (
@@ -97,10 +159,49 @@ func Button(c *ui.Context, label string) ui.Element {
 	return b
 }
 
+// Option is one choice of a Segmented control.
+type Option struct {
+	Value, Label string
+}
+
+// Segmented chooses one of options into *value: a recessed track whose chosen
+// segment rises out of it. It reports whether the choice changed.
+func Segmented(c *ui.Context, label string, value *string, options []Option) bool {
+	changed := false
+	track := ui.Row(c).Role(ui.RoleRadioGroup).Label(label).Padding(4).Gap(4).Radius(RadiusPill)
+	Recessed(track, 3).Children(func() {
+		for _, o := range options {
+			chosen := *value == o.Value
+			seg := ui.ButtonBase(c.Key(o.Value)).Role(ui.RoleRadio).Label(o.Label).AccessSelected(chosen).
+				Grow(1).Padding(6, 0).Radius(RadiusPill).AlignItems(ui.Center).Justify(ui.Center).
+				Cursor(ui.CursorPointer)
+			if chosen {
+				Raised(seg, 2)
+			}
+			if seg.Clicked() && !chosen {
+				*value, changed = o.Value, true
+			}
+			color := Muted
+			if chosen {
+				color = Accent
+			}
+			Soft(seg).Children(func() {
+				ui.Text(c, o.Label).FontSize(12).FontWeight(500).TextColor(color).SingleLine()
+			})
+		}
+	})
+	return changed
+}
+
 // Theme returns the widget theme matching the look, for the controls Atelier
-// takes from MyGo as they are (text inputs, scroll bars, tooltips).
+// takes from MyGo as they are (text inputs, scroll bars, tooltips), in the
+// palette in use.
 func Theme() *ui.Theme {
-	t := ui.LightTheme().WithAccent(Accent)
+	t := ui.LightTheme()
+	if isDark {
+		t = ui.DarkTheme()
+	}
+	t = t.WithAccent(Accent)
 	t.Background = Base
 	t.Surface = Base
 	t.SurfaceHover = Base

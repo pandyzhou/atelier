@@ -156,7 +156,7 @@ func (w *Weekly) day(c *ui.Context, d int, isToday bool, items []*Item) {
 			if isToday {
 				name.TextColor(theme.Accent)
 				num.Background(theme.Accent)
-				numColor = theme.Light
+				numColor = theme.OnAccent
 			}
 			num.Children(func() {
 				ui.Textf(c, "%d", date.Day()).FontSize(16).FontWeight(600).TextColor(numColor)
@@ -204,7 +204,7 @@ func (w *Weekly) item(c *ui.Context, it *Item) {
 			}
 			theme.Soft(disc).Children(func() {
 				if it.Done {
-					ui.Text(c, "✓").FontSize(11).FontWeight(600).TextColor(theme.Light)
+					ui.Text(c, "✓").FontSize(11).FontWeight(600).TextColor(theme.OnAccent)
 				}
 			})
 			text := ui.Text(c, it.Text).Grow(1).MinWidth(0).FontSize(14).TextColor(theme.Text)

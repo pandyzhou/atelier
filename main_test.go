@@ -10,6 +10,7 @@ import (
 
 	"github.com/pandyzhou/atelier/internal/features/weekly"
 	"github.com/pandyzhou/atelier/internal/store"
+	"github.com/pandyzhou/atelier/internal/theme"
 )
 
 // The view runs without a window in tests, which click and type as a user
@@ -51,6 +52,10 @@ func TestScreenshot(t *testing.T) {
 		t.Skip("set ATELIER_SCREENSHOT to write a screenshot")
 	}
 	a := newApp(store.Open(""))
+	// ATELIER_SCREENSHOT_THEME picks the appearance: light, dark or system.
+	if m := os.Getenv("ATELIER_SCREENSHOT_THEME"); m != "" {
+		a.settings.Appearance = m
+	}
 	tt := ui.NewTester(a.view, 1280, 800)
 	if os.Getenv("ATELIER_SCREENSHOT_SCALE") == "2" {
 		tt.SetScale(2)
@@ -82,5 +87,31 @@ func TestScreenshot(t *testing.T) {
 	defer f.Close()
 	if err := png.Encode(f, tt.Image()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The appearance follows the system until the user picks one, which is saved.
+func TestAppearance(t *testing.T) {
+	dir := t.TempDir()
+	a := newApp(store.Open(dir))
+	tt := ui.NewTester(a.view, 1280, 800)
+	tt.SetDark(true)
+	tt.Frame()
+	if theme.Base != theme.DarkPalette.Base {
+		t.Fatalf("following a dark system, base %v", theme.Base)
+	}
+	if err := tt.Click("浅色"); err != nil {
+		t.Fatal(err)
+	}
+	if a.settings.Appearance != string(theme.ModeLight) || theme.Base != theme.LightPalette.Base {
+		t.Fatalf("after choosing light: appearance %q, base %v", a.settings.Appearance, theme.Base)
+	}
+	// A new start reads the choice back, whatever the system is.
+	b := newApp(store.Open(dir))
+	tb := ui.NewTester(b.view, 1280, 800)
+	tb.SetDark(true)
+	tb.Frame()
+	if b.settings.Appearance != string(theme.ModeLight) || theme.Base != theme.LightPalette.Base {
+		t.Fatalf("after restarting: appearance %q, base %v", b.settings.Appearance, theme.Base)
 	}
 }

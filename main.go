@@ -21,18 +21,35 @@ func features(s *store.Store) []feature.Feature {
 	}
 }
 
+// settings are the shell's own preferences, saved as settings.json.
+type settings struct {
+	// Appearance is a theme.Mode: "system", "light" or "dark".
+	Appearance string `json:"appearance"`
+}
+
 // app is the shell: a sidebar of features and the chosen one's page.
 type app struct {
+	store    *store.Store
+	settings settings
 	features []feature.Feature
 	selected string // the ID of the feature shown
 }
 
 func newApp(s *store.Store) *app {
-	a := &app{features: features(s)}
+	a := &app{store: s, features: features(s), settings: settings{Appearance: string(theme.ModeSystem)}}
+	if err := s.Load("settings", &a.settings); err != nil {
+		log.Printf("settings: load: %v", err)
+	}
 	if len(a.features) > 0 {
 		a.selected = a.features[0].ID()
 	}
 	return a
+}
+
+func (a *app) saveSettings() {
+	if err := a.store.Save("settings", a.settings); err != nil {
+		log.Printf("settings: save: %v", err)
+	}
 }
 
 func (a *app) current() feature.Feature {
@@ -45,6 +62,9 @@ func (a *app) current() feature.Feature {
 }
 
 func (a *app) view(c *ui.Context) {
+	// Before SetTheme, the frame's theme is MyGo's default, which follows the
+	// system's appearance as it changes.
+	theme.Use(theme.PaletteFor(theme.Mode(a.settings.Appearance), c.Theme().Dark))
 	c.SetTheme(theme.Theme())
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Padding(24, 0, 24, 24).Children(func() {
 		// The sidebar is a raised panel, set apart from the page beside it.
@@ -55,9 +75,19 @@ func (a *app) view(c *ui.Context) {
 				ui.Text(c, "个人工作室").FontSize(12).TextColor(theme.Muted)
 			})
 			theme.Groove(c).MarginX(4)
-			ui.Column(c).Gap(12).Role(ui.RoleTabList).Label("功能").Children(func() {
+			ui.Column(c).Grow(1).Gap(12).Role(ui.RoleTabList).Label("功能").Children(func() {
 				for _, f := range a.features {
 					a.navItem(c.Key(f.ID()), f)
+				}
+			})
+			ui.Column(c).Gap(10).Children(func() {
+				ui.Text(c, "外观").PaddingX(8).FontSize(12).FontWeight(500).TextColor(theme.Muted)
+				if theme.Segmented(c, "外观", &a.settings.Appearance, []theme.Option{
+					{Value: string(theme.ModeLight), Label: "浅色"},
+					{Value: string(theme.ModeDark), Label: "深色"},
+					{Value: string(theme.ModeSystem), Label: "系统"},
+				}) {
+					a.saveSettings()
 				}
 			})
 		})
