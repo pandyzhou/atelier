@@ -75,21 +75,18 @@ func (a *app) view(c *ui.Context) {
 // body is the sidebar and the chosen feature's page, under the title bar.
 func (a *app) body(c *ui.Context) {
 	ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Padding(4, 0, 24, 24).Children(func() {
-		// The sidebar is a raised panel, set apart from the page beside it.
-		mallow.Card(c, mallow.Large).Width(184).Shrink(0).Padding(28, 16).Gap(24).Children(func() {
-			ui.Column(c).PaddingX(12).Gap(4).Children(func() {
-				ui.Text(c, "Atelier").FontSize(20).FontWeight(600).TextColor(mallow.Text)
-				ui.Text(c, "个人工作室").FontSize(12).TextColor(mallow.Muted)
-			})
-			mallow.Groove(c).MarginX(4)
-			ui.Column(c).Grow(1).Gap(12).Role(ui.RoleTabList).Label("功能").Children(func() {
-				for _, f := range a.features {
-					if mallow.NavItem(c.Key(f.ID()), f.Title(), f.ID() == a.selected).Clicked() {
-						a.selected = f.ID()
-					}
-				}
-			})
-			ui.Column(c).Gap(10).Children(func() {
+		// The sidebar: the app's name, the features (the chosen one's recess
+		// slides between them) and the appearance switch at the bottom.
+		items := make([]mallow.Item, len(a.features))
+		for i, f := range a.features {
+			items[i] = mallow.Item{ID: f.ID(), Label: f.Title()}
+		}
+		mallow.Sidebar(c, mallow.SidebarOptions{
+			Title:    "Atelier",
+			Subtitle: "个人工作室",
+			Items:    items,
+			Selected: &a.selected,
+			Footer: func() {
 				mallow.Label(c, "外观").PaddingX(8)
 				if mallow.Segmented(c, "外观", &a.settings.Appearance, []mallow.Option{
 					{Value: string(mallow.ModeLight), Label: "浅色"},
@@ -98,7 +95,7 @@ func (a *app) body(c *ui.Context) {
 				}) {
 					a.saveSettings()
 				}
-			})
+			},
 		})
 		ui.Column(c).Grow(1).MinWidth(0).Children(func() {
 			if f := a.current(); f != nil {
