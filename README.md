@@ -22,6 +22,17 @@ go tool mygo build   # 打包
 ATELIER_SCREENSHOT=shot.png go test -run Screenshot .
 ```
 
+## 发布
+
+GitHub Actions（`.github/workflows/windows.yml`）会打两个 Windows 包：安装包 `atelier-setup-<版本>-amd64.exe`，以及便携版 `atelier-<版本>-windows-amd64-portable.zip`。
+
+- 发布新版本：先改 `mygo.json` 里的 `version`，提交后推送同名标签，Actions 会构建并发布到 Releases：
+  ```sh
+  git tag v0.1.0
+  git push origin v0.1.0
+  ```
+- 只想试打包：在 GitHub 的 Actions 页面手动运行 Windows 工作流，产物会保存在这次运行的 Artifacts 里，不会创建 Release。
+
 数据以 JSON 保存在 `%AppData%\Atelier`（macOS 为 `~/Library/Application Support/Atelier`）。
 
 ## 结构

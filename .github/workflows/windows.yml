@@ -1,0 +1,79 @@
+# Builds the Windows app: an installer and a portable zip.
+#
+# - Push a tag like v0.2.0 (matching "version" in mygo.json): builds both and
+#   publishes them as a GitHub release.
+# - Run it by hand from the Actions tab: builds both and keeps them as the
+#   run's artifacts, without a release.
+name: Windows
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # creating the release and uploading to it
+
+jobs:
+  build:
+    # MyGo needs no cgo, so Linux compiles the Windows app; NSIS makes the
+    # installer there as well.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Read the version
+        id: version
+        run: |
+          v=$(jq -r .version mygo.json)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "v$v" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::mygo.json has version $v but the tag is $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+      - name: Install NSIS
+        run: sudo apt-get update && sudo apt-get install -y nsis
+
+      - name: Build
+        run: go tool mygo build -platform windows/amd64
+
+      - name: Package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          out=build/windows-amd64
+          mkdir -p dist
+          cp "$out/atelier-setup-$VERSION-amd64.exe" dist/
+          # The portable zip holds the files the app ships with, listed in
+          # .mygo-files, inside an Atelier folder.
+          mkdir -p portable/Atelier
+          while IFS= read -r f; do
+            [ -n "$f" ] && cp -r "$out/$f" portable/Atelier/
+          done < "$out/.mygo-files"
+          (cd portable && zip -r "../dist/atelier-$VERSION-windows-amd64-portable.zip" Atelier)
+          ls -la dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: atelier-windows-${{ steps.version.outputs.version }}
+          path: dist/*
+
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
+          fi
