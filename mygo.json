@@ -11,5 +11,9 @@
   },
   "resourcesExclude": [
     "icon.png"
-  ]
+  ],
+  "updates": {
+    "publicKey": "Uev/vcHU50Twx2fxBf+sgcECFP2OVE081IkaJCgIKHs=",
+    "github": "pandyzhou/atelier"
+  }
 }

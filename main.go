@@ -56,6 +56,8 @@ type app struct {
 	fonts    []fontChoice // the fonts to choose from, once the settings asked
 	box      *secret.Box  // seals the models' keys
 	models   modelsState  // what the models' part of the settings shows
+	updater  updater      // where new versions come from
+	update   updateState  // what is known of a newer version
 	// ping tests a model's connection: llm.Ping, but in tests.
 	ping func(context.Context, llm.Config) error
 	win  mallow.Window // the window, for the title bar's buttons; nil in tests
@@ -64,6 +66,8 @@ type app struct {
 func newApp(s *store.Store) *app {
 	a := &app{store: s, features: features(s), settings: settings{Appearance: string(mallow.ModeSystem)}}
 	a.box, a.ping = secret.New(s.Dir()), llm.Ping
+	// No updates until main says where they come from: tests have none.
+	a.updater = updater{enabled: func() bool { return false }}
 	if err := s.Load("settings", &a.settings); err != nil {
 		log.Printf("settings: load: %v", err)
 	}
@@ -124,6 +128,11 @@ func (a *app) body(c *ui.Context) {
 				ui.Row(c).Children(func() {
 					gear := mallow.IconButton(c, "设置", mallow.GlyphSettings, mallow.IconButtonStyle{Size: 36, Active: on})
 					mallow.Tooltip(c, gear, "设置")
+					// A dot beside the gear: a newer version waits in the
+					// settings.
+					if a.update.phase == updateAvailable || a.update.phase == updateReady {
+						ui.Box(c).Size(8, 8).Radius(4).Margin(2, 0, 0, 6).Background(mallow.Accent)
+					}
 					switch {
 					case !gear.Clicked():
 					case on:
@@ -386,6 +395,7 @@ func (a *app) aboutSettings(c *ui.Context, row func(name, note string, width flo
 	row("版本", "Atelier 个人工作室", 0, func() {
 		ui.Text(c, version()).FontSize(14).TextColor(mallow.Muted)
 	})
+	a.updateRows(c, row)
 }
 
 func main() {
@@ -408,6 +418,10 @@ func main() {
 			HideWindowButtons: true,
 			Content:           ui.View(a.view),
 		})
+		// Released builds look for a newer version as they start, and say
+		// so only if there is one.
+		a.updater = mygoUpdater()
+		a.checkForUpdate(true)
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)

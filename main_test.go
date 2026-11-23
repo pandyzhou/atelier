@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"image/png"
 	"os"
@@ -532,6 +533,76 @@ func TestModelSettings(t *testing.T) {
 	click(t, tt, "删除模型")
 	if len(a.settings.Models) != 1 || a.settings.Model != a.settings.Models[0].ID {
 		t.Errorf("after deleting the default model: %+v, default %d", a.settings.Models, a.settings.Model)
+	}
+}
+
+// A newer version is found in the settings, installed, and run by a
+// relaunch; a build that cannot update says so.
+func TestUpdate(t *testing.T) {
+	a := newApp(store.Open(""))
+	tt := ui.NewTester(a.view, 1280, 800)
+	click(t, tt, "设置", "关于")
+	if !tt.HasText("这个版本不能自动更新：它不是发布版，或者装在了没有写入权限的位置") || tt.HasText("检查更新") {
+		t.Fatalf("a build without updates: %q", tt.Texts())
+	}
+
+	var found *newVersion
+	var checkErr, installErr error
+	relaunched := false
+	a.updater = updater{
+		enabled:  func() bool { return true },
+		check:    func(context.Context) (*newVersion, error) { return found, checkErr },
+		relaunch: func() { relaunched = true },
+	}
+	// Quiet, as at launch, a check that finds nothing says nothing.
+	a.checkForUpdate(true)
+	tt.Frame()
+	if a.update.phase != updateIdle || !tt.HasText("检查更新") {
+		t.Fatalf("after a quiet check that found nothing: phase %d", a.update.phase)
+	}
+	click(t, tt, "检查更新")
+	tt.Frame()
+	if !tt.HasText("已经是最新版本") {
+		t.Fatalf("after a check that found nothing: %q", tt.Texts())
+	}
+
+	found = &newVersion{
+		version: "9.9.9",
+		notes:   "### 新功能\n\n可以自动更新了\n",
+		install: func(_ context.Context, progress func(float64)) error {
+			progress(0.5)
+			return installErr
+		},
+	}
+	// Found as the app starts, it waits in the settings, with its notes.
+	a.checkForUpdate(true)
+	tt.Frame()
+	if a.update.phase != updateAvailable || !tt.HasText("发现新版本 v9.9.9") || !tt.HasText("· 新功能\n\n可以自动更新了") {
+		t.Fatalf("after finding a version: phase %d, %q", a.update.phase, tt.Texts())
+	}
+	// A download that fails can be tried again.
+	installErr = errors.New("connection reset")
+	click(t, tt, "下载并安装")
+	tt.Frame()
+	if a.update.phase != updateFailed || !tt.HasText("没有成功：connection reset") {
+		t.Fatalf("after a failed download: phase %d, %q", a.update.phase, tt.Texts())
+	}
+	installErr = nil
+	click(t, tt, "再试一次")
+	tt.Frame()
+	if a.update.phase != updateReady || !tt.HasText("v9.9.9 已经装好，重启后生效") {
+		t.Fatalf("after installing: phase %d, %q", a.update.phase, tt.Texts())
+	}
+	click(t, tt, "立即重启")
+	if !relaunched {
+		t.Errorf("立即重启 did not relaunch the app")
+	}
+}
+
+func TestPlainNotes(t *testing.T) {
+	got := plainNotes("### 标题一\n\n\n正文\n- 一条\n\n## 标题二\r\n")
+	if want := "· 标题一\n\n正文\n- 一条\n\n· 标题二"; got != want {
+		t.Errorf("plainNotes: %q, want %q", got, want)
 	}
 }
 

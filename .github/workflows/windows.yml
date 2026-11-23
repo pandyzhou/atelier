@@ -86,7 +86,34 @@ jobs:
           sudo dpkg -i ~/nsis-debs/*.deb
           makensis -VERSION
 
+      - name: 写发布说明
+        env:
+          PREV: ${{ steps.version.outputs.previous }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          range=HEAD
+          [ -n "$PREV" ] && range="$PREV..HEAD"
+          # 每个提交一节：标题作小标题，正文照录，去掉 Co-Authored-By 等署名行。
+          git log --no-merges --reverse --format='%x1f%s%x1e%b' "$range" |
+            awk 'BEGIN { RS = "\037"; FS = "\036" } NF {
+                   printf "### %s\n\n", $1
+                   n = split($2, lines, "\n")
+                   for (i = 1; i <= n; i++)
+                     if (lines[i] !~ /^(Co-Authored-By|Signed-off-by):/) printf "%s\n", lines[i]
+                   printf "\n"
+                 }' | cat -s > notes.md
+          cat notes.md
+          # 构建时读这个文件，把这一版的说明写进更新清单，应用里“发现新版本”时
+          # 显示的就是它。只在这次运行里生成，不提交。
+          { echo "## $VERSION"; echo; cat notes.md; } > CHANGELOG.md
+
+      # 有签名私钥时，构建会多产出自动更新用的文件：完整的更新包、从前几个版本
+      # 升上来的增量包，和一份带签名的清单。已安装的应用只认这把私钥签的更新，
+      # 私钥丢了它们就再也更新不了，所以它只放在仓库的 Actions 密钥里。
       - name: 构建
+        env:
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }} # 读上一个版本的清单，用来做增量包
         run: go tool mygo build -platform windows/amd64
 
       - name: 打包
@@ -103,30 +130,19 @@ jobs:
             exit 1
           fi
           cp "$out/Atelier.exe" "dist/atelier-$VERSION-windows-amd64-portable.exe"
+          # 自动更新用的文件，和安装包一起发布：应用从最新的 Release 里读清单。
+          for f in "$out"/*.tar.gz "$out"/*.delta "$out"/update-*.json; do
+            if [ -e "$f" ]; then cp "$f" dist/; fi
+          done
+          if ! ls dist/update-*.json > /dev/null 2>&1; then
+            echo "::warning::没有生成更新清单：这一版装上后不能自动更新到它。检查 MYGO_UPDATER_PRIVATE_KEY 这个密钥有没有设置。"
+          fi
           ls -la dist
 
       - uses: actions/upload-artifact@v7
         with:
           name: atelier-windows-${{ steps.version.outputs.version }}
           path: dist/*
-
-      - name: 写发布说明
-        if: github.event_name == 'push'
-        env:
-          PREV: ${{ steps.version.outputs.previous }}
-        run: |
-          range=HEAD
-          [ -n "$PREV" ] && range="$PREV..HEAD"
-          # 每个提交一节：标题作小标题，正文照录，去掉 Co-Authored-By 等署名行。
-          git log --no-merges --reverse --format='%x1f%s%x1e%b' "$range" |
-            awk 'BEGIN { RS = "\037"; FS = "\036" } NF {
-                   printf "### %s\n\n", $1
-                   n = split($2, lines, "\n")
-                   for (i = 1; i <= n; i++)
-                     if (lines[i] !~ /^(Co-Authored-By|Signed-off-by):/) printf "%s\n", lines[i]
-                   printf "\n"
-                 }' | cat -s > notes.md
-          cat notes.md
 
       - name: 发布 Release
         if: github.event_name == 'push'
