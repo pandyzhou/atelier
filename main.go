@@ -5,6 +5,7 @@ package main
 
 import (
 	"log"
+	"strings"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -175,22 +176,47 @@ type fontChoice struct {
 
 // knownFonts are the families worth offering, where they are installed:
 // those with Chinese glyphs, as text in a fallback font is set unevenly and
-// takes no strikethrough. The first of a line's families that is there
-// stands for the line.
+// takes no strikethrough. A line is installed if a family's name begins
+// with one of its names, without regard to case: foundries put versions
+// and weights after them, as "Alibaba PuHuiTi 3.0". Of several that do,
+// the shortest name is the family's plain one.
 var knownFonts = []struct {
-	label    string
-	families []string
+	label string
+	names []string
 }{
 	{"等线", []string{"DengXian"}},
 	{"MiSans", []string{"MiSans"}},
-	{"鸿蒙黑体", []string{"HarmonyOS Sans SC"}},
-	{"思源黑体", []string{"Source Han Sans SC", "Noto Sans SC", "Noto Sans CJK SC"}},
-	{"思源宋体", []string{"Source Han Serif SC", "Noto Serif SC", "Noto Serif CJK SC"}},
+	{"鸿蒙黑体", []string{"HarmonyOS Sans SC", "HarmonyOS Sans"}},
+	{"阿里巴巴普惠体", []string{"Alibaba PuHuiTi", "阿里巴巴普惠体"}},
+	{"OPPO Sans", []string{"OPPO Sans", "OPPOSans"}},
+	{"vivo Sans", []string{"vivo Sans"}},
+	{"思源黑体", []string{"Source Han Sans SC", "Noto Sans SC", "Noto Sans CJK SC", "思源黑体"}},
+	{"思源宋体", []string{"Source Han Serif SC", "Noto Serif SC", "Noto Serif CJK SC", "思源宋体"}},
+	{"更纱黑体", []string{"Sarasa Gothic SC", "Sarasa UI SC", "更纱黑体 SC"}},
 	{"霞鹜文楷", []string{"LXGW WenKai", "霞鹜文楷"}},
+	{"霞鹜新晰黑", []string{"LXGW Neo XiHei", "霞鹜新晰黑"}},
+	{"得意黑", []string{"Smiley Sans", "得意黑"}},
 	{"黑体", []string{"SimHei"}},
 	{"宋体", []string{"SimSun"}},
 	{"楷体", []string{"KaiTi"}},
 	{"仿宋", []string{"FangSong"}},
+}
+
+// installed returns the family, of those the system has, that one of
+// names stands for, "" if none does.
+func installed(families, names []string) string {
+	for _, name := range names {
+		best := ""
+		for _, f := range families {
+			if len(f) >= len(name) && strings.EqualFold(f[:len(name)], name) && (best == "" || len(f) < len(best)) {
+				best = f
+			}
+		}
+		if best != "" {
+			return best
+		}
+	}
+	return ""
 }
 
 // fontChoices lists the fonts to choose from: the default, then those of
@@ -199,17 +225,14 @@ func (a *app) fontChoices() []fontChoice {
 	if a.fonts != nil {
 		return a.fonts
 	}
-	have := map[string]bool{}
+	var families []string
 	for _, f := range ui.FontFamilies() {
-		have[f.Name] = true
+		families = append(families, f.Name)
 	}
 	a.fonts = []fontChoice{{"", "微软雅黑"}}
 	for _, k := range knownFonts {
-		for _, family := range k.families {
-			if have[family] {
-				a.fonts = append(a.fonts, fontChoice{family, k.label})
-				break
-			}
+		if family := installed(families, k.names); family != "" {
+			a.fonts = append(a.fonts, fontChoice{family, k.label})
 		}
 	}
 	return a.fonts

@@ -441,6 +441,25 @@ func TestTextSettings(t *testing.T) {
 	mallow.Font = defaultFont
 }
 
+// A known font is found under the name its foundry gives the version
+// installed, and the plain family before its weights.
+func TestInstalledFont(t *testing.T) {
+	families := []string{"Alibaba PuHuiTi 3.0 Heavy", "Alibaba PuHuiTi 3.0", "SimSun-ExtB", "SimSun", "noto sans sc"}
+	for _, c := range []struct {
+		names []string
+		want  string
+	}{
+		{[]string{"Alibaba PuHuiTi"}, "Alibaba PuHuiTi 3.0"},
+		{[]string{"SimSun"}, "SimSun"},
+		{[]string{"Source Han Sans SC", "Noto Sans SC"}, "noto sans sc"},
+		{[]string{"LXGW WenKai"}, ""},
+	} {
+		if got := installed(families, c.names); got != c.want {
+			t.Errorf("installed(%q) = %q, want %q", c.names, got, c.want)
+		}
+	}
+}
+
 // fakeWindow records what the title bar's buttons ask of the window.
 type fakeWindow struct {
 	maximized bool
