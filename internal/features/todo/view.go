@@ -314,7 +314,7 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 // heading: Enter, or leaving it, keeps the new name; Escape the old one.
 func (t *Todo) rename(c *ui.Context, list int) {
 	input := mallow.TextInput(c, &t.ui.renameDraft).Label("清单的新名字").
-		FontSize(24).Padding(2, 4).FocusBind(&t.ui.focus, focusRename)
+		FontSize(24).FocusBind(&t.ui.focus, focusRename)
 	cancelled := false
 	input.OnShortcut(0, ui.KeyEscape, func() { cancelled = true })
 	switch {
@@ -341,7 +341,7 @@ func (t *Todo) adder(c *ui.Context) {
 		var input ui.Element
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 			input = mallow.TextInput(c, &t.ui.draft).Placeholder("+ 添加任务，回车确认").Label("添加任务").
-				Grow(1).MinWidth(0).Padding(10, 4)
+				Grow(1).MinWidth(0)
 			weekly := mallow.IconButton(c, "每周重复", mallow.GlyphRepeat, mallow.IconButtonStyle{Size: 34, Active: t.ui.addWeekly})
 			if weekly.Clicked() {
 				t.ui.addWeekly = !t.ui.addWeekly

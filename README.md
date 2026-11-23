@@ -1,6 +1,6 @@
 # Atelier
 
-个人综合桌面应用，用 [MyGo](https://github.com/egoist/mygo) 原生 UI 编写，界面组件来自自己维护的新拟态组件库 [mallow](https://github.com/pandyzhou/mallow)：界面全由 Go 代码描述并在 GPU 上绘制，不依赖浏览器内核，打包后是一个只有几 MB 的可执行文件。
+个人综合桌面应用，用 [MyGo](https://github.com/egoist/mygo) 原生 UI 编写，界面组件来自自己维护的组件库 [mallow](https://github.com/pandyzhou/mallow)，有新拟态和自然有机两种风格，在设置里切换：界面全由 Go 代码描述并在 GPU 上绘制，不依赖浏览器内核，打包后是一个只有几 MB 的可执行文件。
 
 目前的功能：
 

@@ -36,6 +36,8 @@ github.com/pandyzhou/mallow v0.1.16 h1:bwRlSg7Y2qVW1mXPU0Msbnxl1Err3ZgpG8FTFMQMg
 github.com/pandyzhou/mallow v0.1.16/go.mod h1:PkH/2ozhiMdnMCHUbbCEZqilm7+xDnkYMc0Utawc+5M=
 github.com/pandyzhou/mallow v0.1.17 h1:yuKTkKTRCuT0QUExXli+h4ykOKNf136NABWL7lg+l/I=
 github.com/pandyzhou/mallow v0.1.17/go.mod h1:PkH/2ozhiMdnMCHUbbCEZqilm7+xDnkYMc0Utawc+5M=
+github.com/pandyzhou/mallow v0.1.18 h1:IdyyD4UV/aBuj/lSbAbBPJ47ZiU6oBNTQgwS7LVrqPY=
+github.com/pandyzhou/mallow v0.1.18/go.mod h1:PkH/2ozhiMdnMCHUbbCEZqilm7+xDnkYMc0Utawc+5M=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=

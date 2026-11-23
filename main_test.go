@@ -239,6 +239,8 @@ func TestScreenshot(t *testing.T) {
 		t.Skip("set ATELIER_SCREENSHOT to write a screenshot")
 	}
 	a := newApp(store.Open(""))
+	// ATELIER_SCREENSHOT_STYLE picks the style: neumorphism or organic.
+	a.settings.Style = os.Getenv("ATELIER_SCREENSHOT_STYLE")
 	// ATELIER_SCREENSHOT_THEME picks the appearance: light, dark or system.
 	if m := os.Getenv("ATELIER_SCREENSHOT_THEME"); m != "" {
 		a.settings.Appearance = m
@@ -315,6 +317,33 @@ func TestAppearance(t *testing.T) {
 	tb.Frame()
 	if b.settings.Appearance != string(mallow.ModeLight) || mallow.Base != mallow.LightPalette.Base {
 		t.Fatalf("after restarting: appearance %q, base %v", b.settings.Appearance, mallow.Base)
+	}
+}
+
+// The style is chosen on the settings page, and saved.
+func TestStyle(t *testing.T) {
+	dir := t.TempDir()
+	a := newApp(store.Open(dir))
+	tt := ui.NewTester(a.view, 1280, 800)
+	tt.Frame()
+	if mallow.CurrentLook() != mallow.Neumorphism {
+		t.Fatalf("a first start is not in neumorphism")
+	}
+	click(t, tt, "设置", "自然有机")
+	if a.settings.Style != string(mallow.StyleOrganic) || mallow.CurrentLook() != mallow.Organic {
+		t.Fatalf("after choosing 自然有机: style %q", a.settings.Style)
+	}
+	// The to-do page works as it does in the other look.
+	click(t, tt, "待办")
+	add(t, tt, "Buy milk")
+	click(t, tt, "打开Buy milk", "高", "关闭详情")
+	if !tt.HasText("Buy milk") || !tt.HasText("!!!") {
+		t.Errorf("the task edited on the organic to-do page: %q", tt.Texts())
+	}
+	b := newApp(store.Open(dir))
+	ui.NewTester(b.view, 1280, 800).Frame()
+	if b.settings.Style != string(mallow.StyleOrganic) || mallow.CurrentLook() != mallow.Organic {
+		t.Errorf("after restarting: style %q", b.settings.Style)
 	}
 }
 

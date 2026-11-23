@@ -26,6 +26,9 @@ func features(s *store.Store) []feature.Feature {
 type settings struct {
 	// Appearance is a mallow.Mode: "system", "light" or "dark".
 	Appearance string `json:"appearance"`
+	// Style is a mallow.Style: "neumorphism", also when it is empty, or
+	// "organic".
+	Style string `json:"style,omitempty"`
 }
 
 // app is the shell: a title bar, a sidebar of features and the chosen one's
@@ -66,7 +69,7 @@ func (a *app) current() feature.Feature {
 }
 
 func (a *app) view(c *ui.Context) {
-	mallow.UseMode(c, mallow.Mode(a.settings.Appearance))
+	mallow.UseStyle(c, mallow.Style(a.settings.Style), mallow.Mode(a.settings.Appearance))
 	ui.Column(c).Fill().Children(func() {
 		mallow.TitleBar(c, a.win, nil)
 		a.body(c)
@@ -131,13 +134,19 @@ func version() string {
 // feature's page is: each a row, its name and what it is about to the left
 // and its control to the right.
 func (a *app) settingsPage(c *ui.Context) {
-	row := func(name, note string, control func()) {
+	row := func(name, note string, width float32, control func()) {
 		ui.Row(c).Padding(16, 4).Gap(24).AlignItems(ui.Center).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 				ui.Text(c, name).FontSize(15).FontWeight(500).TextColor(mallow.Text)
 				ui.Text(c, note).FontSize(12).TextColor(mallow.Muted)
 			})
-			control()
+			// A column, which gives a Segmented its width: in a row it is
+			// only as wide as its shortest label asks, and cuts the rest.
+			if width > 0 {
+				ui.Column(c).Shrink(0).Width(width).Children(control)
+			} else {
+				control()
+			}
 		})
 	}
 	ui.Row(c).Fill().Padding(0, 28, 0, 16).AlignItems(ui.Stretch).Children(func() {
@@ -150,9 +159,23 @@ func (a *app) settingsPage(c *ui.Context) {
 }
 
 // settingsRows are the settings themselves, under the page's heading.
-func (a *app) settingsRows(c *ui.Context, row func(name, note string, control func())) {
+func (a *app) settingsRows(c *ui.Context, row func(name, note string, width float32, control func())) {
 	ui.Text(c, "设置").FontSize(28).FontWeight(600).TextColor(mallow.Text).Margin(0, 0, 12, 0)
-	row("外观", "浅色、深色，或者跟随系统", func() {
+	row("风格", "界面的样子：柔和凹凸的新拟态，或者大地色的自然有机", 200, func() {
+		style := a.settings.Style
+		if style == "" {
+			style = string(mallow.StyleNeumorphism)
+		}
+		if mallow.Segmented(c, "风格", &style, []mallow.Option{
+			{Value: string(mallow.StyleNeumorphism), Label: "新拟态"},
+			{Value: string(mallow.StyleOrganic), Label: "自然有机"},
+		}) {
+			a.settings.Style = style
+			a.saveSettings()
+		}
+	})
+	mallow.Groove(c)
+	row("外观", "浅色、深色，或者跟随系统", 200, func() {
 		if mallow.Segmented(c, "外观", &a.settings.Appearance, []mallow.Option{
 			{Value: string(mallow.ModeLight), Label: "浅色"},
 			{Value: string(mallow.ModeDark), Label: "深色"},
@@ -162,7 +185,7 @@ func (a *app) settingsRows(c *ui.Context, row func(name, note string, control fu
 		}
 	})
 	mallow.Groove(c)
-	row("版本", "Atelier 个人工作室", func() {
+	row("版本", "Atelier 个人工作室", 0, func() {
 		ui.Text(c, version()).FontSize(14).TextColor(mallow.Muted)
 	})
 }
