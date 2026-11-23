@@ -41,6 +41,39 @@ func TestWeeklyAddAndCheck(t *testing.T) {
 	if !items[0].Done {
 		t.Errorf("item not checked after a click")
 	}
+
+	// Hovering the item shows its buttons: ↻ makes it weekly, and on the
+	// weekly entry the same button stops it again.
+	if err := tt.Click("每周重复"); err != nil {
+		t.Fatalf("click 每周重复: %v (texts %q)", err, tt.Texts())
+	}
+	if e := w.Entries(0); len(e) != 1 || !e[0].Repeats() || !e[0].Done {
+		t.Fatalf("after 每周重复, Monday lists %+v", e)
+	}
+	if err := tt.Click("取消每周重复（本周保留）"); err != nil {
+		t.Fatalf("click 取消每周重复: %v", err)
+	}
+	if e := w.Entries(0); len(e) != 1 || e[0].Repeats() {
+		t.Fatalf("after stopping, Monday lists %+v", e)
+	}
+}
+
+// The week's own list takes entries apart from the days.
+func TestWeekListView(t *testing.T) {
+	a := newApp(store.Open(""))
+	tt := ui.NewTester(a.view, 1280, 800)
+	if err := tt.Click("添加本周待办"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("读完一本书")
+	tt.Key(0, ui.KeyEnter)
+	w := a.current().(*weekly.Weekly)
+	if e := w.Entries(weekly.WeekList); len(e) != 1 || e[0].Text != "读完一本书" {
+		t.Fatalf("week list %+v", e)
+	}
+	if !tt.HasText("0 / 1") {
+		t.Errorf("no count on the week list, texts %q", tt.Texts())
+	}
 }
 
 // TestScreenshot renders the window without opening it and writes a PNG to
@@ -66,6 +99,7 @@ func TestScreenshot(t *testing.T) {
 		day  string
 		text string
 	}{
+		{"添加本周待办", "读完《置身事内》"}, {"添加本周待办", "跑步 3 次"}, {"添加本周待办", "给家里打电话"},
 		{"周一添加事项", "写周报"}, {"周一添加事项", "修 bug"}, {"周二添加事项", "读书 30 分钟"},
 		{"周三添加事项", "复习英语"}, {"周四添加事项", "采购日用品"}, {"周六添加事项", "整理房间"},
 	} {
@@ -75,11 +109,24 @@ func TestScreenshot(t *testing.T) {
 		tt.Type(it.text)
 		tt.Key(0, ui.KeyEnter)
 	}
-	for _, done := range []string{"写周报", "修 bug"} {
+	for _, done := range []string{"写周报", "修 bug", "跑步 3 次"} {
 		if err := tt.Click(done); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// Two weekly entries, each marked with ↻.
+	for _, weekly := range []string{"写周报", "跑步 3 次"} {
+		if err := tt.Click(weekly); err != nil {
+			t.Fatal(err)
+		}
+		if err := tt.Click("每周重复"); err != nil {
+			t.Fatal(err)
+		}
+		if err := tt.Click(weekly); err != nil { // its check, clicked once more, stays done
+			t.Fatal(err)
+		}
+	}
+	tt.Move(5, 400) // the pointer away, so that no entry shows its buttons
 	// Let the 200 ms transitions finish before taking the picture.
 	tt.Advance(time.Second)
 	f, err := os.Create(path)
