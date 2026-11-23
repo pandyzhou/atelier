@@ -22,11 +22,7 @@ func TestWeeklyAddAndCheck(t *testing.T) {
 	if !tt.HasText("每周清单") {
 		t.Fatalf("sidebar missing the weekly checklist, texts %q", tt.Texts())
 	}
-	if err := tt.Click("周一添加事项"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Type("写周报")
-	tt.Key(0, ui.KeyEnter)
+	add(t, tt, "周一", "写周报")
 	if !tt.HasText("写周报") {
 		t.Fatalf("item not shown after adding, texts %q", tt.Texts())
 	}
@@ -62,11 +58,7 @@ func TestWeeklyAddAndCheck(t *testing.T) {
 func TestWeekListView(t *testing.T) {
 	a := newApp(store.Open(""))
 	tt := ui.NewTester(a.view, 1280, 800)
-	if err := tt.Click("添加本周待办"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Type("读完一本书")
-	tt.Key(0, ui.KeyEnter)
+	add(t, tt, "整周", "读完一本书")
 	w := a.current().(*weekly.Weekly)
 	if e := w.Entries(weekly.WeekList); len(e) != 1 || e[0].Text != "读完一本书" {
 		t.Fatalf("week list %+v", e)
@@ -74,6 +66,28 @@ func TestWeekListView(t *testing.T) {
 	if !tt.HasText("0 / 1") {
 		t.Errorf("no count on the week list, texts %q", tt.Texts())
 	}
+
+	// With the adder's ↻ on, a thing comes back every week from the start.
+	if err := tt.Click("设为每周重复"); err != nil {
+		t.Fatal(err)
+	}
+	add(t, tt, "整周", "大扫除")
+	if e := w.Entries(weekly.WeekList); len(e) != 2 || e[0].Text != "大扫除" || !e[0].Repeats() {
+		t.Fatalf("week list after adding a weekly thing %+v", e)
+	}
+}
+
+// add types text into the adder, set to put it on target: "整周" or a day's
+// name.
+func add(t *testing.T, tt *ui.Tester, target, text string) {
+	t.Helper()
+	for _, label := range []string{target, "添加事项"} {
+		if err := tt.Click(label); err != nil {
+			t.Fatalf("click %q: %v (texts %q)", label, err, tt.Texts())
+		}
+	}
+	tt.Type(text)
+	tt.Key(0, ui.KeyEnter)
 }
 
 // TestScreenshot renders the window without opening it and writes a PNG to
@@ -99,15 +113,11 @@ func TestScreenshot(t *testing.T) {
 		day  string
 		text string
 	}{
-		{"添加本周待办", "读完《置身事内》"}, {"添加本周待办", "跑步 3 次"}, {"添加本周待办", "给家里打电话"},
-		{"周一添加事项", "写周报"}, {"周一添加事项", "修 bug"}, {"周二添加事项", "读书 30 分钟"},
-		{"周三添加事项", "复习英语"}, {"周四添加事项", "采购日用品"}, {"周六添加事项", "整理房间"},
+		{"整周", "读完《置身事内》"}, {"整周", "跑步 3 次"}, {"整周", "给家里打电话"},
+		{"周一", "写周报"}, {"周一", "修 bug"}, {"周二", "读书 30 分钟"},
+		{"周三", "复习英语"}, {"周四", "采购日用品"}, {"周六", "整理房间"},
 	} {
-		if err := tt.Click(it.day); err != nil {
-			t.Fatal(err)
-		}
-		tt.Type(it.text)
-		tt.Key(0, ui.KeyEnter)
+		add(t, tt, it.day, it.text)
 	}
 	for _, done := range []string{"写周报", "修 bug", "跑步 3 次"} {
 		if err := tt.Click(done); err != nil {

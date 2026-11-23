@@ -1,6 +1,6 @@
-// Package weekly is the weekly checklist: the week's own to-do list, then one
-// column per day, each a list of things to do that can be checked off. Any
-// of them can repeat every week, from the week it was set on.
+// Package weekly is the weekly checklist, a to-do list of the week: the
+// week's own things, then each day's, which can be checked off. Any of them
+// can repeat every week, from the week it was set on.
 package weekly
 
 import (
@@ -75,8 +75,9 @@ type Weekly struct {
 	store     *store.Store
 	data      data
 	monday    time.Time // the Monday of the week shown
-	drafts    [7]string // what is typed in each day's input
-	weekDraft string    // what is typed in the week list's input
+	draft     string    // what is typed in the adder
+	addTo     string    // where the adder puts it: "week", or a day "0" to "6"
+	addRepeat bool      // whether the adder makes it come back every week
 	now       func() time.Time
 }
 
@@ -93,6 +94,7 @@ func New(s *store.Store) *Weekly {
 		w.data.RuleDone = map[string][]int{}
 	}
 	w.monday = mondayOf(w.now())
+	w.addTo = fmt.Sprint(weekday(w.now()))
 	return w
 }
 
@@ -140,6 +142,18 @@ func (w *Weekly) Add(day int, text string) {
 	w.data.Next++
 	k := w.week()
 	w.data.Weeks[k] = append(w.data.Weeks[k], &Item{ID: w.data.Next, Text: text, Day: day})
+	w.save()
+}
+
+// AddWeekly adds a thing to do every week, from the week shown on, to a day
+// (or the list).
+func (w *Weekly) AddWeekly(day int, text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	w.data.Next++
+	w.data.Rules = append(w.data.Rules, &Rule{ID: w.data.Next, Text: text, Day: day, Since: w.week()})
 	w.save()
 }
 

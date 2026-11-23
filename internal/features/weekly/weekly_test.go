@@ -131,3 +131,13 @@ func TestRulesAreSaved(t *testing.T) {
 	again.shift(1)
 	equal(t, "the week after, after a restart", texts(again, 3), "复习英语↻")
 }
+
+func TestAddWeekly(t *testing.T) {
+	w := newAt(t, "")
+	w.AddWeekly(WeekList, "大扫除")
+	equal(t, "this week", texts(w, WeekList), "大扫除↻")
+	w.shift(3)
+	equal(t, "three weeks on", texts(w, WeekList), "大扫除↻")
+	w.shift(-4)
+	equal(t, "the week before", texts(w, WeekList))
+}
