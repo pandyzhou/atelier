@@ -15,16 +15,17 @@ import (
 // and answers as told.
 type service struct {
 	*httptest.Server
-	path, auth, key string
-	body            map[string]any
-	status          int
-	answer          string
+	path, auth, key, version string
+	body                     map[string]any
+	status                   int
+	answer                   string
 }
 
 func newService(t *testing.T, status int, answer string) *service {
 	s := &service{status: status, answer: answer}
 	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.path, s.auth, s.key = r.URL.Path, r.Header.Get("Authorization"), r.Header.Get("X-Api-Key")
+		s.version = r.Header.Get("Anthropic-Version")
 		data, _ := io.ReadAll(r.Body)
 		s.body = nil
 		json.Unmarshal(data, &s.body)
@@ -67,10 +68,35 @@ func TestPing(t *testing.T) {
 		if s.path != c.path || s.body["model"] != "the-model" {
 			t.Errorf("%s: sent to %s with model %v, want %s", c.kind, s.path, s.body["model"], c.path)
 		}
-		// Anthropic's SDK decides which header carries the key; either is
-		// the key, trimmed of the spaces pasted around it.
-		if s.auth != "Bearer sk-test" && s.key != "sk-test" {
-			t.Errorf("%s: key sent as authorization %q, x-api-key %q", c.kind, s.auth, s.key)
+		// The key goes out trimmed of the spaces pasted around it: as
+		// Anthropic reads it, and to a service that is not Anthropic's
+		// own, as here, also as OpenAI's services do.
+		if s.auth != "Bearer sk-test" {
+			t.Errorf("%s: authorization sent as %q", c.kind, s.auth)
+		}
+		if c.kind == Anthropic && (s.key != "sk-test" || s.version != anthropicVersion || s.body["max_tokens"] == nil) {
+			t.Errorf("anthropic: x-api-key %q, version %q, body %v", s.key, s.version, s.body)
+		}
+		if c.kind != Anthropic && s.key != "" {
+			t.Errorf("%s: sent an x-api-key", c.kind)
+		}
+	}
+}
+
+// Anthropic's own service gets the key in its header alone; another that
+// speaks its interface gets it as OpenAI's services send it too.
+func TestAnthropicHeader(t *testing.T) {
+	for _, c := range []struct {
+		base string
+		both bool
+	}{
+		{"", false},
+		{"https://api.anthropic.com/v1", false},
+		{"https://gw.example/anthropic", true},
+	} {
+		h := anthropicHeader(Config{Kind: Anthropic, BaseURL: c.base, Key: "sk-test"})
+		if h.Get("X-Api-Key") != "sk-test" || (h.Get("Authorization") == "Bearer sk-test") != c.both {
+			t.Errorf("%q: x-api-key %q, authorization %q", c.base, h.Get("X-Api-Key"), h.Get("Authorization"))
 		}
 	}
 }

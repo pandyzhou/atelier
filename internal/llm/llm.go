@@ -59,7 +59,7 @@ func (c Config) base() string {
 	}
 	switch c.Kind {
 	case Anthropic:
-		// The SDK adds "/v1/messages" itself.
+		// Endpoint adds "/v1/messages".
 		u = strings.TrimSuffix(u, "/messages")
 		u = strings.TrimSuffix(u, "/v1")
 	case Chat:

@@ -13,25 +13,31 @@ import (
 // disagree on its name (max_tokens, max_completion_tokens,
 // max_output_tokens) and some refuse the ones they do not know.
 func pingOpenAI(ctx context.Context, c Config) error {
-	var body any
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+c.Key)
 	if c.Kind == Chat {
-		body = map[string]any{
+		return post(ctx, c.Endpoint(), header, map[string]any{
 			"model":    c.Model,
 			"messages": []map[string]string{{"role": "user", "content": pingText}},
-		}
-	} else {
-		body = map[string]any{"model": c.Model, "input": pingText}
+		})
 	}
+	return post(ctx, c.Endpoint(), header, map[string]any{"model": c.Model, "input": pingText})
+}
+
+// post sends body as JSON to endpoint and reports whether the service
+// answered with JSON and a status that says it worked. The error is an
+// *Error.
+func post(ctx context.Context, endpoint string, header http.Header, body any) error {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return &Error{Message: err.Error()}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint(), bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(data))
 	if err != nil {
 		return &Error{Message: "地址写得不对：" + err.Error()}
 	}
+	req.Header = header
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.Key)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return netError(err)
