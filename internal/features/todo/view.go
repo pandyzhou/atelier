@@ -278,7 +278,7 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 	}
 	ui.Row(c).Shrink(0).PaddingX(4).Gap(16).AlignItems(ui.End).Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
-			if isList && t.ui.renaming == list {
+			if isList && list != Inbox && t.ui.renaming == list {
 				t.rename(c, list)
 			} else {
 				ui.Text(c, title).FontSize(28).FontWeight(600).TextColor(mallow.Text).SingleLine()

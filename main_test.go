@@ -114,6 +114,11 @@ func TestTodoListNames(t *testing.T) {
 	if len(d.Lists()) != 1 || tt.HasText("Nope") {
 		t.Fatalf("lists after Escape: %+v", d.Lists())
 	}
+	// The inbox has no name to change: its heading is its name.
+	click(t, tt, "收集箱")
+	if !tt.HasText("收集箱") || tt.HasText("清单的新名字") {
+		t.Errorf("the inbox shows a field for its name: %q", tt.Texts())
+	}
 	click(t, tt, "Work", "重命名清单")
 	tt.Type("2")
 	tt.Key(0, ui.KeyEnter)
