@@ -34,7 +34,8 @@ type app struct {
 	store    *store.Store
 	settings settings
 	features []feature.Feature
-	selected string        // the ID of the feature shown
+	selected string        // the ID of the feature shown, or settingsID
+	before   string        // the feature the settings were opened from
 	win      mallow.Window // the window, for the title bar's buttons; nil in tests
 }
 
@@ -86,7 +87,22 @@ func (a *app) body(c *ui.Context) {
 			Subtitle: "个人工作室",
 			Items:    items,
 			Selected: &a.selected,
-			Bottom:   []mallow.Item{{ID: settingsID, Label: "设置"}},
+			// The gear in the corner opens the settings, and goes back to
+			// the feature left for them when clicked again.
+			Footer: func() {
+				on := a.selected == settingsID
+				ui.Row(c).Children(func() {
+					gear := mallow.IconButton(c, "设置", mallow.GlyphSettings, mallow.IconButtonStyle{Size: 36, Active: on})
+					mallow.Tooltip(c, gear, "设置")
+					switch {
+					case !gear.Clicked():
+					case on:
+						a.selected = a.before
+					default:
+						a.before, a.selected = a.selected, settingsID
+					}
+				})
+			},
 		})
 		ui.Column(c).Grow(1).MinWidth(0).Children(func() {
 			if a.selected == settingsID {
@@ -98,8 +114,8 @@ func (a *app) body(c *ui.Context) {
 	})
 }
 
-// settingsID is what the sidebar's entry for the settings chooses: the ID
-// of no feature.
+// settingsID is what is selected while the settings show: the ID of no
+// feature.
 const settingsID = "settings"
 
 // version is the app's version, as "v0.1.16": mygo.json's, which a build

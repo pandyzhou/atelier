@@ -298,6 +298,11 @@ func TestAppearance(t *testing.T) {
 	if a.settings.Appearance != string(mallow.ModeLight) || mallow.Base != mallow.LightPalette.Base {
 		t.Fatalf("after choosing light: appearance %q, base %v", a.settings.Appearance, mallow.Base)
 	}
+	// The gear goes back to the feature the settings were opened from.
+	click(t, tt, "设置")
+	if a.selected != "todo" {
+		t.Errorf("after the gear a second time, %q is selected", a.selected)
+	}
 	// A new start reads the choice back, whatever the system is.
 	b := newApp(store.Open(dir))
 	tb := ui.NewTester(b.view, 1280, 800)
