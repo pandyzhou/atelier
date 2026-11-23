@@ -2,6 +2,7 @@ package todo
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -18,6 +19,7 @@ type viewState struct {
 	monday      string           // the Monday of the week the week view shows
 	addDay      string           // the day the week view's adder adds to, "0" to "6"
 	calMonth    time.Time        // the month the details' calendar shows
+	calOpen     bool             // the details' calendar shows
 	calFor      int              // the task that month was set for
 	renaming    int              // the list whose name is being changed, 0 for none
 	renameDraft string           // what is typed as its new name
@@ -45,14 +47,12 @@ const (
 )
 
 const (
-	navWidth    = 208
-	detailWidth = 316
+	navWidth = 208
 )
 
 // View builds the page: the views and lists to choose from, the tasks of
 // the one chosen, and the details of the task opened, if one is.
 func (t *Todo) View(c *ui.Context) {
-	open := t.Task(t.ui.open)
 	// The page is one card, its parts set apart by grooves; the padding
 	// around it leaves its shadow room.
 	ui.Row(c).Fill().Padding(8, 28, 4, 16).AlignItems(ui.Stretch).Children(func() {
@@ -61,10 +61,6 @@ func (t *Todo) View(c *ui.Context) {
 				t.nav(c)
 				mallow.GrooveV(c).Margin(24, 0)
 				t.main(c)
-				if open != nil {
-					mallow.GrooveV(c).Margin(24, 0)
-					t.detail(c.Key(open.ID), open)
-				}
 			})
 		})
 	})
@@ -218,7 +214,7 @@ func (t *Todo) openIn(view string) int {
 // main is the view chosen: its heading, then a card with the line that
 // adds a task and the tasks in their groups.
 func (t *Todo) main(c *ui.Context) {
-	groups := t.groups(t.ui.view, t.ui.monday)
+	groups := t.withOpen(t.groups(t.ui.view, t.ui.monday))
 	ui.Column(c).Grow(1).MinWidth(0).Gap(20).Padding(24, 0, 0, 0).Children(func() {
 		ui.Column(c).PaddingX(28).Children(func() { t.heading(c, groups) })
 		ui.Column(c).Grow(1).MinHeight(0).Padding(0, 0, 8, 0).Children(func() {
@@ -385,6 +381,23 @@ func (t *Todo) adder(c *ui.Context) {
 	})
 }
 
+// withOpen keeps the task that is open in the list: edited so that the
+// view no longer lists it, as given another day, it stays, in a group of
+// its own at the top, until it is closed.
+func (t *Todo) withOpen(groups []group) []group {
+	open := t.Task(t.ui.open)
+	if open == nil {
+		t.ui.open = 0
+		return groups
+	}
+	for _, g := range groups {
+		if slices.Contains(g.tasks, open) {
+			return groups
+		}
+	}
+	return append([]group{{title: "正在编辑", tasks: []*Task{open}}}, groups...)
+}
+
 // group is a heading, if it has one, and the tasks under it.
 func (t *Todo) group(c *ui.Context, g group) {
 	fold := t.ui.view + "/" + g.title
@@ -421,7 +434,11 @@ func (t *Todo) group(c *ui.Context, g group) {
 			return
 		}
 		for _, k := range g.tasks {
-			t.row(c.Key(k.ID), k, g.dated)
+			if k.ID == t.ui.open {
+				t.detail(c.Key(k.ID), k)
+			} else {
+				t.row(c.Key(k.ID), k, g.dated)
+			}
 		}
 		if len(g.tasks) == 0 {
 			ui.Text(c, "今天没有要做的").Padding(6, 8).FontSize(14).TextColor(mallow.Muted)
@@ -446,7 +463,7 @@ func priorityColor(p int) ui.Color {
 // already, as its due date and its list.
 func (t *Todo) row(c *ui.Context, k *Task, dated bool) {
 	today := t.Today()
-	row := mallow.ListRow(c, t.ui.open == k.ID)
+	row := mallow.ListRow(c, false)
 	defer func() { t.taskMenu(c, row, k) }()
 	row.Children(func() {
 		done := k.Done
@@ -476,101 +493,118 @@ func (t *Todo) row(c *ui.Context, k *Task, dated bool) {
 			}
 		})
 		if body.Clicked() {
-			if t.ui.open == k.ID {
-				t.ui.open = 0
-			} else {
-				t.ui.open = k.ID
-			}
+			t.ui.open = k.ID
 		}
 	})
 }
 
-// detail is the card that edits the task opened.
+// detail is the task that is open: its row unfolded, in place, into a card
+// that edits it. The title and the note are on it as written; the rest is a
+// line each below, and the calendar shows when asked for.
 func (t *Todo) detail(c *ui.Context, k *Task) {
 	today := t.Today()
 	if t.ui.calFor != k.ID {
 		// The calendar opens on the month the task is due in.
-		t.ui.calFor, t.ui.calMonth = k.ID, t.now()
+		t.ui.calFor, t.ui.calMonth, t.ui.calOpen = k.ID, t.now(), false
 		if d, err := time.ParseInLocation(dateLayout, k.Due, time.Local); err == nil {
 			t.ui.calMonth = d
 		}
 	}
-	label := func(s string) { mallow.Label(c, s).Padding(8, 4, 0, 4) }
-	ui.Column(c).Width(detailWidth).Shrink(0).PaddingY(8).Children(func() {
-		ui.Scroll(c).Grow(1).Padding(12, 20, 16, 20).Gap(10).Children(func() {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				done := k.Done
-				if mallow.CheckMark(c, &done, "完成这项任务").Changed() {
-					t.SetDone(k, done)
-				}
-				ui.Text(c, "任务详情").Grow(1).FontSize(14).FontWeight(600).TextColor(mallow.Text)
-				if mallow.GhostIconButton(c, "删除任务", mallow.GlyphTrash, mallow.IconButtonStyle{Danger: true}).Clicked() {
-					t.Remove(k)
-					t.ui.open = 0
-				}
-				if mallow.GhostIconButton(c, "关闭详情", mallow.GlyphClose, mallow.IconButtonStyle{}).Clicked() {
-					t.ui.open = 0
-				}
-			})
-			if mallow.TextInput(c, &k.Title).Placeholder("任务标题").Label("任务标题").Changed() {
+	line := func(name string, width float32, control func()) {
+		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+			mallow.Label(c, name).Width(48).Shrink(0)
+			// A column, which stretches what is in it: a Segmented set
+			// in a row is only as wide as its shortest label asks.
+			ui.Column(c).Grow(1).MinWidth(0).MaxWidth(width).Children(control)
+		})
+	}
+	card := mallow.Card(c, mallow.Small).Margin(10, 4).Padding(12, 16, 16, 12).Gap(12)
+	card.OnShortcut(0, ui.KeyEscape, func() { t.ui.open = 0 })
+	card.Children(func() {
+		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+			done := k.Done
+			if mallow.CheckMark(c, &done, "完成这项任务").Changed() {
+				t.SetDone(k, done)
+			}
+			if mallow.TextInput(c, &k.Title).Placeholder("任务标题").Label("任务标题").Grow(1).MinWidth(0).Margin(0, 8, 0, 4).Changed() {
 				t.Changed(k)
 			}
-
-			label("日期")
-			ui.Row(c).Gap(8).Wrap().Children(func() {
-				for _, q := range []struct{ name, date string }{
-					{"今天", today}, {"明天", addDays(today, 1)}, {"下周一", addDays(mondayOf(today), 7)}, {"无日期", ""},
-				} {
-					if mallow.Chip(c, q.name, k.Due == q.date).Clicked() {
-						k.Due = q.date
-						if q.date == "" {
-							k.Repeat = RepeatNone
+			if mallow.GhostIconButton(c, "删除任务", mallow.GlyphTrash, mallow.IconButtonStyle{Danger: true}).Clicked() {
+				t.Remove(k)
+				t.ui.open = 0
+			}
+			if mallow.GhostIconButton(c, "关闭详情", mallow.GlyphClose, mallow.IconButtonStyle{}).Clicked() {
+				t.ui.open = 0
+			}
+		})
+		ui.Column(c).Padding(0, 4, 0, 36).Gap(14).Children(func() {
+			if mallow.TextArea(c, &k.Note).Placeholder("备注").Label("备注").MinHeight(48).Changed() {
+				t.Changed(k)
+			}
+			line("日期", 640, func() {
+				ui.Row(c).Grow(1).Gap(8).Wrap().Children(func() {
+					quick := false
+					for _, q := range []struct{ name, date string }{
+						{"今天", today}, {"明天", addDays(today, 1)}, {"下周一", addDays(mondayOf(today), 7)}, {"无日期", ""},
+					} {
+						quick = quick || k.Due == q.date
+						if mallow.Chip(c, q.name, k.Due == q.date).Clicked() {
+							k.Due = q.date
+							if q.date == "" {
+								k.Repeat = RepeatNone
+							}
+							t.Changed(k)
 						}
+					}
+					// The last chip is the day itself when it is none of
+					// those, and brings the calendar.
+					other := "其他日期"
+					if !quick {
+						other = shortDate(k.Due, today)
+					}
+					if mallow.Chip(c.Key("other"), other, !quick || t.ui.calOpen).Label("其他日期").Clicked() {
+						t.ui.calOpen = !t.ui.calOpen
+					}
+				})
+			})
+			if t.ui.calOpen {
+				ui.Column(c).Padding(0, 0, 0, 60).MaxWidth(360).Children(func() {
+					if mallow.Calendar(c, "选择日期", &t.ui.calMonth, &k.Due, t.now()) {
 						t.Changed(k)
 					}
-				}
-			})
-			ui.Column(c).Padding(4, 4, 0, 4).Children(func() {
-				if mallow.Calendar(c, "选择日期", &t.ui.calMonth, &k.Due, t.now()) {
+				})
+			}
+			line("优先级", 220, func() {
+				priority := strconv.Itoa(k.Priority)
+				if mallow.Segmented(c, "优先级", &priority, []mallow.Option{
+					{Value: "0", Label: "无"}, {Value: "1", Label: "低"}, {Value: "2", Label: "中"}, {Value: "3", Label: "高"},
+				}) {
+					k.Priority, _ = strconv.Atoi(priority)
 					t.Changed(k)
 				}
 			})
-
-			label("优先级")
-			priority := strconv.Itoa(k.Priority)
-			if mallow.Segmented(c, "优先级", &priority, []mallow.Option{
-				{Value: "0", Label: "无"}, {Value: "1", Label: "低"}, {Value: "2", Label: "中"}, {Value: "3", Label: "高"},
-			}) {
-				k.Priority, _ = strconv.Atoi(priority)
-				t.Changed(k)
-			}
-
-			label("重复")
-			if mallow.Segmented(c, "重复", &k.Repeat, []mallow.Option{
-				{Value: RepeatNone, Label: "不重复"}, {Value: RepeatDaily, Label: "每天"},
-				{Value: RepeatWeekly, Label: "每周"}, {Value: RepeatMonthly, Label: "每月"},
-			}) {
-				t.Changed(k)
-			}
-
-			label("清单")
-			ui.Row(c).Gap(8).Wrap().Children(func() {
-				ids := []int{Inbox}
-				for _, l := range t.data.Lists {
-					ids = append(ids, l.ID)
-				}
-				for _, id := range ids {
-					if mallow.Chip(c.Key(id), t.ListName(id), k.List == id).Clicked() {
-						k.List = id
-						t.Changed(k)
-					}
+			line("重复", 300, func() {
+				if mallow.Segmented(c, "重复", &k.Repeat, []mallow.Option{
+					{Value: RepeatNone, Label: "不重复"}, {Value: RepeatDaily, Label: "每天"},
+					{Value: RepeatWeekly, Label: "每周"}, {Value: RepeatMonthly, Label: "每月"},
+				}) {
+					t.Changed(k)
 				}
 			})
-
-			label("备注")
-			if mallow.TextArea(c, &k.Note).Placeholder("写点备注…").Label("备注").Changed() {
-				t.Changed(k)
-			}
+			line("清单", 640, func() {
+				ui.Row(c).Grow(1).Gap(8).Wrap().Children(func() {
+					ids := []int{Inbox}
+					for _, l := range t.data.Lists {
+						ids = append(ids, l.ID)
+					}
+					for _, id := range ids {
+						if mallow.Chip(c.Key(id), t.ListName(id), k.List == id).Clicked() {
+							k.List = id
+							t.Changed(k)
+						}
+					}
+				})
+			})
 		})
 	})
 }
