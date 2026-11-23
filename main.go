@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"strings"
 
@@ -13,6 +14,8 @@ import (
 
 	"github.com/pandyzhou/atelier/internal/feature"
 	"github.com/pandyzhou/atelier/internal/features/todo"
+	"github.com/pandyzhou/atelier/internal/llm"
+	"github.com/pandyzhou/atelier/internal/secret"
 	"github.com/pandyzhou/atelier/internal/store"
 )
 
@@ -34,6 +37,11 @@ type settings struct {
 	Font string `json:"font,omitempty"`
 	// Size is how large the interface is, one of sizes: "" is "normal".
 	Size string `json:"size,omitempty"`
+	// Models are the language models configured, Model the ID of the one
+	// the app's features use, and NextModel the last ID given.
+	Models    []modelConfig `json:"models,omitempty"`
+	Model     int           `json:"model,omitempty"`
+	NextModel int           `json:"nextModel,omitempty"`
 }
 
 // app is the shell: a title bar, a sidebar of features and the chosen one's
@@ -42,15 +50,20 @@ type app struct {
 	store    *store.Store
 	settings settings
 	features []feature.Feature
-	selected string        // the ID of the feature shown, or settingsID
-	before   string        // the feature the settings were opened from
-	section  string        // the part of the settings shown
-	fonts    []fontChoice  // the fonts to choose from, once the settings asked
-	win      mallow.Window // the window, for the title bar's buttons; nil in tests
+	selected string       // the ID of the feature shown, or settingsID
+	before   string       // the feature the settings were opened from
+	section  string       // the part of the settings shown
+	fonts    []fontChoice // the fonts to choose from, once the settings asked
+	box      *secret.Box  // seals the models' keys
+	models   modelsState  // what the models' part of the settings shows
+	// ping tests a model's connection: llm.Ping, but in tests.
+	ping func(context.Context, llm.Config) error
+	win  mallow.Window // the window, for the title bar's buttons; nil in tests
 }
 
 func newApp(s *store.Store) *app {
 	a := &app{store: s, features: features(s), settings: settings{Appearance: string(mallow.ModeSystem)}}
+	a.box, a.ping = secret.New(s.Dir()), llm.Ping
 	if err := s.Load("settings", &a.settings); err != nil {
 		log.Printf("settings: load: %v", err)
 	}
@@ -253,6 +266,7 @@ type settingsSection struct {
 func (a *app) settingsSections() []settingsSection {
 	return []settingsSection{
 		{"look", "界面", a.lookSettings},
+		{"models", "模型", a.modelSettings},
 		{"about", "关于", a.aboutSettings},
 	}
 }

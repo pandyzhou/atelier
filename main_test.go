@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"image/png"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/pandyzhou/atelier/internal/features/todo"
+	"github.com/pandyzhou/atelier/internal/llm"
 	"github.com/pandyzhou/atelier/internal/store"
 	"github.com/pandyzhou/mallow"
 )
@@ -457,6 +460,78 @@ func TestInstalledFont(t *testing.T) {
 		if got := installed(families, c.names); got != c.want {
 			t.Errorf("installed(%q) = %q, want %q", c.names, got, c.want)
 		}
+	}
+}
+
+// A model is added, filled in and tested in the settings; its key is saved
+// sealed, and opened again for the features that use the model.
+func TestModelSettings(t *testing.T) {
+	dir := t.TempDir()
+	a := newApp(store.Open(dir))
+	var pinged []llm.Config
+	var answer error
+	a.ping = func(_ context.Context, c llm.Config) error {
+		pinged = append(pinged, c)
+		return answer
+	}
+	tt := ui.NewTester(a.view, 1280, 800)
+	click(t, tt, "设置", "模型", "添加模型")
+	if len(a.settings.Models) != 1 || a.settings.Model != a.settings.Models[0].ID {
+		t.Fatalf("after adding a model: %+v, default %d", a.settings.Models, a.settings.Model)
+	}
+	if _, ok := a.DefaultModel(); !ok {
+		t.Errorf("the model added is not ready as the default")
+	}
+	// Tested without a key, nothing is sent that could work: it says so.
+	click(t, tt, "Chat Completions", "接口地址")
+	tt.Type("https://api.example.com/v1")
+	click(t, tt, "模型名")
+	tt.Type("some-model")
+	click(t, tt, "API Key")
+	tt.Type("sk-secret-123")
+	tt.Frame()
+	m := a.settings.Models[0]
+	if m.Kind != string(llm.Chat) || m.BaseURL != "https://api.example.com/v1" || m.Model != "some-model" {
+		t.Fatalf("the model filled in: %+v", m)
+	}
+	if m.Key == "" || strings.Contains(m.Key, "sk-secret") {
+		t.Fatalf("the key is saved as %q", m.Key)
+	}
+	if tt.HasText("sk-secret-123") {
+		t.Errorf("the key shows on the page")
+	}
+	// The settings file holds the sealed key alone.
+	if data, err := os.ReadFile(filepath.Join(dir, "settings.json")); err != nil || strings.Contains(string(data), "sk-secret") {
+		t.Fatalf("settings.json: %v, holds the key: %v", err, strings.Contains(string(data), "sk-secret"))
+	}
+
+	click(t, tt, "测试连接")
+	tt.Frame()
+	want := llm.Config{Kind: llm.Chat, BaseURL: "https://api.example.com/v1", Key: "sk-secret-123", Model: "some-model"}
+	if len(pinged) != 1 || pinged[0] != want || !tt.HasText("连接正常，模型有回应") {
+		t.Fatalf("the test sent %+v; texts %q", pinged, tt.Texts())
+	}
+	answer = &llm.Error{Message: "Key 不对，或者没有权限（401）"}
+	click(t, tt, "测试连接")
+	tt.Frame()
+	if !tt.HasText("Key 不对，或者没有权限（401）") {
+		t.Errorf("a failed test does not say why: %q", tt.Texts())
+	}
+
+	// After a restart the model is there, and its key opens.
+	b := newApp(store.Open(dir))
+	if c, ok := b.DefaultModel(); !ok || c != want {
+		t.Fatalf("after restarting, the default model is %+v, %v", c, ok)
+	}
+	// A second model can be made the default; deleting it gives that back.
+	click(t, tt, "添加模型", "设为默认")
+	second := a.settings.Models[1].ID
+	if a.settings.Model != second {
+		t.Fatalf("after 设为默认: default %d, want %d", a.settings.Model, second)
+	}
+	click(t, tt, "删除模型")
+	if len(a.settings.Models) != 1 || a.settings.Model != a.settings.Models[0].ID {
+		t.Errorf("after deleting the default model: %+v, default %d", a.settings.Models, a.settings.Model)
 	}
 }
 
