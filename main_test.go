@@ -405,6 +405,42 @@ func TestStyle(t *testing.T) {
 	}
 }
 
+// The size zooms the whole interface, and the font is the theme's: both are
+// saved.
+func TestTextSettings(t *testing.T) {
+	dir := t.TempDir()
+	a := newApp(store.Open(dir))
+	tt := ui.NewTester(a.view, 1280, 800)
+	click(t, tt, "设置", "特大")
+	if a.settings.Size != "xlarge" || zoomOf(a.settings.Size) != 1.25 {
+		t.Fatalf("after choosing 特大: size %q", a.settings.Size)
+	}
+	// At the largest size the page still works.
+	click(t, tt, "待办")
+	add(t, tt, "Buy milk")
+	if !tt.HasText("Buy milk") {
+		t.Errorf("no task added at the largest size: %q", tt.Texts())
+	}
+	// The default font is always offered; another where it is installed.
+	click(t, tt, "设置", "微软雅黑")
+	if a.settings.Font != "" || mallow.Font != defaultFont {
+		t.Errorf("after choosing the default font: %q, drawn in %q", a.settings.Font, mallow.Font)
+	}
+	if fonts := a.fontChoices(); len(fonts) > 1 {
+		click(t, tt, fonts[1].label)
+		tt.Frame()
+		if a.settings.Font != fonts[1].family || mallow.Font != fonts[1].family {
+			t.Errorf("after choosing %s: %q, drawn in %q", fonts[1].label, a.settings.Font, mallow.Font)
+		}
+	}
+	b := newApp(store.Open(dir))
+	ui.NewTester(b.view, 1280, 800).Frame()
+	if b.settings.Size != "xlarge" || b.settings.Font != a.settings.Font {
+		t.Errorf("after restarting: size %q, font %q", b.settings.Size, b.settings.Font)
+	}
+	mallow.Font = defaultFont
+}
+
 // fakeWindow records what the title bar's buttons ask of the window.
 type fakeWindow struct {
 	maximized bool

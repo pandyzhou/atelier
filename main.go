@@ -29,6 +29,10 @@ type settings struct {
 	// Style is a mallow.Style: "neumorphism", also when it is empty, or
 	// "organic".
 	Style string `json:"style,omitempty"`
+	// Font is the family text is set in, "" for defaultFont.
+	Font string `json:"font,omitempty"`
+	// Size is how large the interface is, one of sizes: "" is "normal".
+	Size string `json:"size,omitempty"`
 }
 
 // app is the shell: a title bar, a sidebar of features and the chosen one's
@@ -40,6 +44,7 @@ type app struct {
 	selected string        // the ID of the feature shown, or settingsID
 	before   string        // the feature the settings were opened from
 	section  string        // the part of the settings shown
+	fonts    []fontChoice  // the fonts to choose from, once the settings asked
 	win      mallow.Window // the window, for the title bar's buttons; nil in tests
 }
 
@@ -70,6 +75,13 @@ func (a *app) current() feature.Feature {
 }
 
 func (a *app) view(c *ui.Context) {
+	// The font and the size first: the theme takes the one, and the frame is
+	// laid out at the other.
+	mallow.Font = defaultFont
+	if a.settings.Font != "" {
+		mallow.Font = a.settings.Font
+	}
+	c.SetZoom(zoomOf(a.settings.Size))
 	mallow.UseStyle(c, mallow.Style(a.settings.Style), mallow.Mode(a.settings.Appearance))
 	ui.Column(c).Fill().Children(func() {
 		mallow.TitleBar(c, a.win, nil)
@@ -129,6 +141,78 @@ func version() string {
 		return "v" + v
 	}
 	return "开发版"
+}
+
+// defaultFont is the family text is set in unless another is chosen.
+const defaultFont = "Microsoft YaHei UI"
+
+// sizes are how large the interface can be: the whole of it is zoomed, the
+// text and what holds it together, so that nothing is cut or crowded.
+var sizes = []struct {
+	id, label string
+	zoom      float32
+}{
+	{"small", "小", 0.9},
+	{"normal", "标准", 1},
+	{"large", "大", 1.1},
+	{"xlarge", "特大", 1.25},
+}
+
+// zoomOf is the zoom of a size, 1 for one it does not know.
+func zoomOf(size string) float32 {
+	for _, s := range sizes {
+		if s.id == size {
+			return s.zoom
+		}
+	}
+	return 1
+}
+
+// fontChoice is a font the settings offer: its family, and what to call it.
+type fontChoice struct {
+	family, label string
+}
+
+// knownFonts are the families worth offering, where they are installed:
+// those with Chinese glyphs, as text in a fallback font is set unevenly and
+// takes no strikethrough. The first of a line's families that is there
+// stands for the line.
+var knownFonts = []struct {
+	label    string
+	families []string
+}{
+	{"等线", []string{"DengXian"}},
+	{"MiSans", []string{"MiSans"}},
+	{"鸿蒙黑体", []string{"HarmonyOS Sans SC"}},
+	{"思源黑体", []string{"Source Han Sans SC", "Noto Sans SC", "Noto Sans CJK SC"}},
+	{"思源宋体", []string{"Source Han Serif SC", "Noto Serif SC", "Noto Serif CJK SC"}},
+	{"霞鹜文楷", []string{"LXGW WenKai", "霞鹜文楷"}},
+	{"黑体", []string{"SimHei"}},
+	{"宋体", []string{"SimSun"}},
+	{"楷体", []string{"KaiTi"}},
+	{"仿宋", []string{"FangSong"}},
+}
+
+// fontChoices lists the fonts to choose from: the default, then those of
+// knownFonts the system has. It asks the system once.
+func (a *app) fontChoices() []fontChoice {
+	if a.fonts != nil {
+		return a.fonts
+	}
+	have := map[string]bool{}
+	for _, f := range ui.FontFamilies() {
+		have[f.Name] = true
+	}
+	a.fonts = []fontChoice{{"", "微软雅黑"}}
+	for _, k := range knownFonts {
+		for _, family := range k.families {
+			if have[family] {
+				a.fonts = append(a.fonts, fontChoice{family, k.label})
+				break
+			}
+		}
+	}
+	return a.fonts
 }
 
 // settingsSection is a part of the settings, an entry of the menu down the
@@ -228,6 +312,35 @@ func (a *app) lookSettings(c *ui.Context, row func(name, note string, width floa
 		}) {
 			a.saveSettings()
 		}
+	})
+	a.textSettings(c, row)
+}
+
+// textSettings are the font and the size, the rest of how the app looks.
+func (a *app) textSettings(c *ui.Context, row func(name, note string, width float32, control func())) {
+	row("大小", "文字和整个界面一起放大或缩小", 240, func() {
+		size := a.settings.Size
+		if size == "" {
+			size = "normal"
+		}
+		options := make([]mallow.Option, len(sizes))
+		for i, s := range sizes {
+			options[i] = mallow.Option{Value: s.id, Label: s.label}
+		}
+		if mallow.Segmented(c, "大小", &size, options) {
+			a.settings.Size = size
+			a.saveSettings()
+		}
+	})
+	row("字体", "只列出这台电脑上装了的中文字体", 360, func() {
+		ui.Row(c).Gap(8).Wrap().Justify(ui.End).Children(func() {
+			for _, f := range a.fontChoices() {
+				if mallow.Chip(c, f.label, a.settings.Font == f.family).Clicked() {
+					a.settings.Font = f.family
+					a.saveSettings()
+				}
+			}
+		})
 	})
 }
 
