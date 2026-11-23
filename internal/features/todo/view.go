@@ -11,14 +11,16 @@ import (
 
 // viewState is what the page shows, which is not saved.
 type viewState struct {
-	view      string    // the view chosen
-	open      int       // the ID of the task whose details show, 0 for none
-	draft     string    // what is typed in the adder
-	listDraft string    // what is typed in the new list's input
-	monday    string    // the Monday of the week the week view shows
-	addDay    string    // the day the week view's adder adds to, "0" to "6"
-	calMonth  time.Time // the month the details' calendar shows
-	calFor    int       // the task that month was set for
+	view       string    // the view chosen
+	open       int       // the ID of the task whose details show, 0 for none
+	draft      string    // what is typed in the adder
+	listDraft  string    // what is typed in the new list's input
+	monday     string    // the Monday of the week the week view shows
+	addDay     string    // the day the week view's adder adds to, "0" to "6"
+	calMonth   time.Time // the month the details' calendar shows
+	calFor     int       // the task that month was set for
+	addingList bool      // the new list's field shows
+	focus      string    // what has the keyboard, of what is bound to it
 	// folded holds the groups folded away, as "<view>/<heading>".
 	folded map[string]bool
 }
@@ -31,6 +33,8 @@ func newViewState(now time.Time) viewState {
 		addDay: strconv.Itoa((int(now.Weekday()) + 6) % 7),
 	}
 }
+
+const focusNewList = "new-list"
 
 const (
 	navWidth    = 208
@@ -85,7 +89,14 @@ func (t *Todo) nav(c *ui.Context) {
 			item(listView(Inbox), "收集箱", mallow.GlyphInbox),
 		})
 		mallow.Groove(c).MarginX(4)
-		mallow.Label(c, "清单").PaddingX(12)
+		// The + beside the heading brings the new list's field, which goes
+		// again once a list is added or the field is left.
+		ui.Row(c).Padding(0, 4, 0, 12).AlignItems(ui.Center).Children(func() {
+			mallow.Label(c, "清单").Grow(1)
+			if mallow.GhostIconButton(c, "新建清单", mallow.GlyphPlus, mallow.IconButtonStyle{}).Clicked() {
+				t.ui.addingList, t.ui.focus = true, focusNewList
+			}
+		})
 		if len(t.data.Lists) > 0 {
 			lists := make([]mallow.Item, len(t.data.Lists))
 			for i, l := range t.data.Lists {
@@ -93,12 +104,18 @@ func (t *Todo) nav(c *ui.Context) {
 			}
 			mallow.SourceList(c, "清单", &t.ui.view, lists)
 		}
-		input := mallow.TextInput(c, &t.ui.listDraft).Placeholder("+ 新建清单").Label("新建清单").Padding(8, 12)
-		if input.Submitted() {
-			if l := t.AddList(t.ui.listDraft); l != nil {
-				t.ui.view = listView(l.ID)
+		if t.ui.addingList {
+			input := mallow.TextInput(c, &t.ui.listDraft).Placeholder("清单的名字，回车确认").Label("清单的名字").
+				Margin(0, 8).FocusBind(&t.ui.focus, focusNewList)
+			switch {
+			case input.Submitted():
+				if l := t.AddList(t.ui.listDraft); l != nil {
+					t.ui.view = listView(l.ID)
+				}
+				t.ui.listDraft, t.ui.addingList, t.ui.focus = "", false, ""
+			case t.ui.focus != focusNewList:
+				t.ui.addingList = t.ui.listDraft != ""
 			}
-			t.ui.listDraft = ""
 		}
 		mallow.Groove(c).MarginX(4)
 		mallow.SourceList(c, "其他", &t.ui.view, []mallow.Item{item(viewDone, "已完成", mallow.GlyphDone)})
@@ -127,7 +144,6 @@ func (t *Todo) main(c *ui.Context) {
 		ui.Column(c).Grow(1).MinHeight(0).Padding(0, 0, 8, 0).Children(func() {
 			if t.ui.view != viewDone {
 				t.adder(c)
-				mallow.Groove(c).MarginX(24)
 			}
 			ui.Scroll(c).Grow(1).Padding(4, 20, 16, 20).Gap(2).Children(func() {
 				for i, g := range groups {
@@ -228,7 +244,7 @@ func (t *Todo) adder(c *ui.Context) {
 	// room once the details show.
 	ui.Column(c).Shrink(0).Padding(0, 24, 16, 24).Gap(12).Children(func() {
 		input := mallow.TextInput(c, &t.ui.draft).Placeholder("+ 添加任务，回车确认").Label("添加任务").
-			Padding(10, 14)
+			Padding(10, 4)
 		if t.ui.view == viewWeek {
 			days := make([]mallow.Option, 7)
 			for d, name := range dayNames {
