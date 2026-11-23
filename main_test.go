@@ -167,6 +167,28 @@ func TestTodoContextMenus(t *testing.T) {
 	}
 }
 
+// A task is made to repeat weekly as it is added, or from its menu.
+func TestTodoWeeklyRepeat(t *testing.T) {
+	d, tt := newTodoTester(t)
+	click(t, tt, "每周重复")
+	add(t, tt, "Check upstream")
+	add(t, tt, "Buy milk")
+	ks := d.Tasks()
+	if ks[0].Repeat != todo.RepeatWeekly || ks[1].Repeat != todo.RepeatNone {
+		t.Fatalf("repeats after adding one weekly and one plain: %q, %q", ks[0].Repeat, ks[1].Repeat)
+	}
+	rightClick(t, tt, "打开Buy milk")
+	click(t, tt, "设为每周重复")
+	if ks[1].Repeat != todo.RepeatWeekly || ks[1].Due == "" {
+		t.Fatalf("after 设为每周重复: repeat %q, due %q", ks[1].Repeat, ks[1].Due)
+	}
+	rightClick(t, tt, "打开Buy milk")
+	click(t, tt, "取消重复")
+	if ks[1].Repeat != todo.RepeatNone {
+		t.Errorf("after 取消重复: repeat %q", ks[1].Repeat)
+	}
+}
+
 func TestTodoWeekView(t *testing.T) {
 	d, tt := newTodoTester(t)
 	click(t, tt, "按周", "周日")

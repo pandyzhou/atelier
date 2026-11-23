@@ -22,6 +22,7 @@ type viewState struct {
 	renaming    int              // the list whose name is being changed, 0 for none
 	renameDraft string           // what is typed as its new name
 	menus       map[string]*bool // the context menus that show, see menuOpen
+	addWeekly   bool             // the next task added repeats weekly
 	addingList  bool             // the new list's field shows
 	focus       string           // what has the keyboard, of what is bound to it
 	// folded holds the groups folded away, as "<view>/<heading>".
@@ -172,9 +173,14 @@ func (t *Todo) taskMenu(c *ui.Context, row ui.Element, k *Task) {
 	if k.Done {
 		check.Label = "标为未完成"
 	}
+	repeat := mallow.MenuEntry{ID: "repeat", Label: "设为每周重复", Glyph: mallow.GlyphRepeat}
+	if k.Repeat != RepeatNone {
+		repeat.Label = "取消重复"
+	}
 	switch mallow.ContextMenu(c, row, t.menuOpen("task:"+strconv.Itoa(k.ID)), []mallow.MenuEntry{
 		{ID: "edit", Label: "编辑", Glyph: mallow.GlyphEdit},
 		check,
+		repeat,
 		{ID: "today", Label: "改到今天", Glyph: mallow.GlyphCalendar},
 		{ID: "tomorrow", Label: "改到明天", Glyph: mallow.GlyphCalendar},
 		{ID: "delete", Label: "删除任务", Glyph: mallow.GlyphTrash, Danger: true},
@@ -183,6 +189,13 @@ func (t *Todo) taskMenu(c *ui.Context, row ui.Element, k *Task) {
 		t.ui.open = k.ID
 	case "done":
 		t.SetDone(k, !k.Done)
+	case "repeat":
+		if k.Repeat != RepeatNone {
+			k.Repeat = RepeatNone
+		} else {
+			k.Repeat = RepeatWeekly
+		}
+		t.Changed(k)
 	case "today":
 		k.Due = today
 		t.Changed(k)
@@ -345,8 +358,22 @@ func (t *Todo) adder(c *ui.Context) {
 	// The week view's days go under the input: beside it they leave it no
 	// room once the details show.
 	ui.Column(c).Shrink(0).Padding(0, 24, 16, 24).Gap(12).Children(func() {
-		input := mallow.TextInput(c, &t.ui.draft).Placeholder("+ 添加任务，回车确认").Label("添加任务").
-			Padding(10, 4)
+		// The button beside the input makes what is added come back every
+		// week, for one task: it is off again once the task is added.
+		var input ui.Element
+		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+			input = mallow.TextInput(c, &t.ui.draft).Placeholder("+ 添加任务，回车确认").Label("添加任务").
+				Grow(1).MinWidth(0).Padding(10, 4)
+			weekly := mallow.IconButton(c, "每周重复", mallow.GlyphRepeat, mallow.IconButtonStyle{Size: 34, Active: t.ui.addWeekly})
+			if weekly.Clicked() {
+				t.ui.addWeekly = !t.ui.addWeekly
+			}
+			tip := "添加为每周重复的任务"
+			if t.ui.addWeekly {
+				tip = "下一个任务会每周重复，再点一次取消"
+			}
+			mallow.Tooltip(c, weekly, tip)
+		})
 		if t.ui.view == viewWeek {
 			days := make([]mallow.Option, 7)
 			for d, name := range dayNames {
@@ -365,7 +392,12 @@ func (t *Todo) adder(c *ui.Context) {
 			default:
 				k.List, _ = viewList(t.ui.view)
 			}
-			t.Add(k)
+			if t.ui.addWeekly {
+				k.Repeat = RepeatWeekly
+			}
+			if t.Add(k) != nil {
+				t.ui.addWeekly = false
+			}
 			t.ui.draft = ""
 		}
 	})
