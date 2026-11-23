@@ -76,7 +76,7 @@ func (a *app) view(c *ui.Context) {
 func (a *app) body(c *ui.Context) {
 	ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Padding(4, 0, 24, 24).Children(func() {
 		// The sidebar: the app's name, the features (the chosen one's recess
-		// slides between them) and the appearance switch at the bottom.
+		// slides between them) and the settings at the bottom.
 		items := make([]mallow.Item, len(a.features))
 		for i, f := range a.features {
 			items[i] = mallow.Item{ID: f.ID(), Label: f.Title()}
@@ -86,22 +86,70 @@ func (a *app) body(c *ui.Context) {
 			Subtitle: "个人工作室",
 			Items:    items,
 			Selected: &a.selected,
-			Footer: func() {
-				mallow.Label(c, "外观").PaddingX(8)
-				if mallow.Segmented(c, "外观", &a.settings.Appearance, []mallow.Option{
-					{Value: string(mallow.ModeLight), Label: "浅色"},
-					{Value: string(mallow.ModeDark), Label: "深色"},
-					{Value: string(mallow.ModeSystem), Label: "系统"},
-				}) {
-					a.saveSettings()
-				}
-			},
+			Bottom:   []mallow.Item{{ID: settingsID, Label: "设置"}},
 		})
 		ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-			if f := a.current(); f != nil {
+			if a.selected == settingsID {
+				a.settingsPage(c.Key(settingsID))
+			} else if f := a.current(); f != nil {
 				f.View(c.Key(f.ID()))
 			}
 		})
+	})
+}
+
+// settingsID is what the sidebar's entry for the settings chooses: the ID
+// of no feature.
+const settingsID = "settings"
+
+// version is the app's version, as "v0.1.16": mygo.json's, which a build
+// links in. Run without one, as in tests, it is a development build.
+func version() string {
+	if v := mygo.App.Version(); v != "" {
+		return "v" + v
+	}
+	return "开发版"
+}
+
+// settingsPage is the page of the shell's own preferences, one card as a
+// feature's page is: each a row, its name and what it is about to the left
+// and its control to the right.
+func (a *app) settingsPage(c *ui.Context) {
+	row := func(name, note string, control func()) {
+		ui.Row(c).Padding(16, 4).Gap(24).AlignItems(ui.Center).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+				ui.Text(c, name).FontSize(15).FontWeight(500).TextColor(mallow.Text)
+				ui.Text(c, note).FontSize(12).TextColor(mallow.Muted)
+			})
+			control()
+		})
+	}
+	ui.Row(c).Fill().Padding(8, 28, 4, 16).AlignItems(ui.Stretch).Children(func() {
+		mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0).Margin(0, 0, 20, 0).Children(func() {
+			// The rows are no wider than reads well: in a wide window a
+			// control at the far end is far from its name.
+			ui.Scroll(c).Grow(1).Padding(24, 28).Children(func() {
+				ui.Column(c).MaxWidth(680).Children(func() { a.settingsRows(c, row) })
+			})
+		})
+	})
+}
+
+// settingsRows are the settings themselves, under the page's heading.
+func (a *app) settingsRows(c *ui.Context, row func(name, note string, control func())) {
+	ui.Text(c, "设置").FontSize(28).FontWeight(600).TextColor(mallow.Text).Margin(0, 0, 12, 0)
+	row("外观", "浅色、深色，或者跟随系统", func() {
+		if mallow.Segmented(c, "外观", &a.settings.Appearance, []mallow.Option{
+			{Value: string(mallow.ModeLight), Label: "浅色"},
+			{Value: string(mallow.ModeDark), Label: "深色"},
+			{Value: string(mallow.ModeSystem), Label: "系统"},
+		}) {
+			a.saveSettings()
+		}
+	})
+	mallow.Groove(c)
+	row("版本", "Atelier 个人工作室", func() {
+		ui.Text(c, version()).FontSize(14).TextColor(mallow.Muted)
 	})
 }
 

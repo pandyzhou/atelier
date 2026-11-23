@@ -290,8 +290,10 @@ func TestAppearance(t *testing.T) {
 	if mallow.Base != mallow.DarkPalette.Base {
 		t.Fatalf("following a dark system, base %v", mallow.Base)
 	}
-	if err := tt.Click("浅色"); err != nil {
-		t.Fatal(err)
+	// The switch is on the settings page, with the version.
+	click(t, tt, "设置", "浅色")
+	if !tt.HasText("版本") || !tt.HasText("开发版") {
+		t.Errorf("the settings page shows no version: %q", tt.Texts())
 	}
 	if a.settings.Appearance != string(mallow.ModeLight) || mallow.Base != mallow.LightPalette.Base {
 		t.Fatalf("after choosing light: appearance %q, base %v", a.settings.Appearance, mallow.Base)
