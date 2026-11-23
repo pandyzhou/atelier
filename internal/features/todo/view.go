@@ -14,17 +14,14 @@ import (
 type viewState struct {
 	view        string           // the view chosen
 	open        int              // the ID of the task whose details show, 0 for none
-	draft       string           // what is typed in the adder
 	listDraft   string           // what is typed in the new list's input
 	monday      string           // the Monday of the week the week view shows
-	addDay      string           // the day the week view's adder adds to, "0" to "6"
 	calMonth    time.Time        // the month the details' calendar shows
 	calOpen     bool             // the details' calendar shows
 	calFor      int              // the task that month was set for
 	renaming    int              // the list whose name is being changed, 0 for none
 	renameDraft string           // what is typed as its new name
 	menus       map[string]*bool // the context menus that show, see menuOpen
-	addWeekly   bool             // the next task added repeats weekly
 	addingList  bool             // the new list's field shows
 	focus       string           // what has the keyboard, of what is bound to it
 	// folded holds the groups folded away, as "<view>/<heading>".
@@ -36,7 +33,6 @@ func newViewState(now time.Time) viewState {
 	return viewState{
 		view:   viewToday,
 		monday: mondayOf(today),
-		addDay: strconv.Itoa((int(now.Weekday()) + 6) % 7),
 	}
 }
 
@@ -44,6 +40,7 @@ func newViewState(now time.Time) viewState {
 const (
 	focusNewList = "new-list"
 	focusRename  = "rename"
+	focusTitle   = "title"
 )
 
 const (
@@ -174,7 +171,7 @@ func (t *Todo) taskMenu(c *ui.Context, row ui.Element, k *Task) {
 		{ID: "delete", Label: "删除任务", Glyph: mallow.GlyphTrash, Danger: true},
 	}) {
 	case "edit":
-		t.ui.open = k.ID
+		t.openTask(k.ID)
 	case "done":
 		t.SetDone(k, !k.Done)
 	case "repeat":
@@ -203,7 +200,7 @@ func (t *Todo) openIn(view string) int {
 	n := 0
 	for _, g := range t.groups(view, mondayOf(t.Today())) {
 		for _, k := range g.tasks {
-			if !k.Done {
+			if !k.Done && k.Title != "" {
 				n++
 			}
 		}
@@ -218,15 +215,6 @@ func (t *Todo) main(c *ui.Context) {
 	ui.Column(c).Grow(1).MinWidth(0).Gap(20).Padding(24, 0, 0, 0).Children(func() {
 		ui.Column(c).PaddingX(28).Children(func() { t.heading(c, groups) })
 		ui.Column(c).Grow(1).MinHeight(0).Padding(0, 0, 8, 0).Children(func() {
-			// A groove parts where tasks are added from the tasks. Under a
-			// field that is itself a line, as neumorphism's, it would be
-			// a second line: there the field's own does.
-			if t.ui.view != viewDone {
-				t.adder(c)
-				if t.ui.view == viewWeek || mallow.CurrentLook() != mallow.Neumorphism {
-					mallow.Groove(c).Margin(0, 24, 4, 24)
-				}
-			}
 			ui.Scroll(c).Grow(1).Padding(4, 20, 16, 20).Gap(2).Children(func() {
 				for i, g := range groups {
 					t.group(c.Key(i), g)
@@ -243,7 +231,7 @@ func (t *Todo) emptyText() string {
 	if t.ui.view == viewDone {
 		return "还没有完成的任务。"
 	}
-	return "这里还没有任务。在上面输入，回车添加。"
+	return "这里还没有任务。点右上角的 + 添加。"
 }
 
 // heading is the view's name, a line about it, and what acts on the view as
@@ -254,7 +242,7 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 	open := 0
 	for _, g := range groups {
 		for _, k := range g.tasks {
-			if !k.Done {
+			if !k.Done && k.Title != "" {
 				open++
 			}
 		}
@@ -291,6 +279,17 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 			}
 			ui.Text(c, note).FontSize(14).TextColor(mallow.Muted)
 		})
+		// What acts on the view, the + that adds a task last: it is at
+		// the same place in every view.
+		defer func() {
+			if t.ui.view == viewDone {
+				return
+			}
+			add := mallow.IconButton(c, "添加任务", mallow.GlyphPlus, mallow.IconButtonStyle{Size: 36, Active: true})
+			if add.Clicked() {
+				t.start()
+			}
+		}()
 		switch {
 		case t.ui.view == viewWeek:
 			ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
@@ -336,55 +335,44 @@ func (t *Todo) rename(c *ui.Context, list int) {
 	}
 }
 
-// adder is the line that adds a task to the view: due today in the views of
-// days, on the day chosen in the week view, and into the list in a list's.
-func (t *Todo) adder(c *ui.Context) {
-	// The week view's days go under the input: beside it they leave it no
-	// room once the details show.
-	ui.Column(c).Shrink(0).Padding(0, 24, 16, 24).Gap(12).Children(func() {
-		// The button beside the input makes what is added come back every
-		// week, for one task: it is off again once the task is added.
-		var input ui.Element
-		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-			input = mallow.TextInput(c, &t.ui.draft).Placeholder("+ 添加任务，回车确认").Label("添加任务").
-				Grow(1).MinWidth(0)
-			weekly := mallow.IconButton(c, "每周重复", mallow.GlyphRepeat, mallow.IconButtonStyle{Size: 34, Active: t.ui.addWeekly})
-			if weekly.Clicked() {
-				t.ui.addWeekly = !t.ui.addWeekly
-			}
-			tip := "添加为每周重复的任务"
-			if t.ui.addWeekly {
-				tip = "下一个任务会每周重复，再点一次取消"
-			}
-			mallow.Tooltip(c, weekly, tip)
-		})
-		if t.ui.view == viewWeek {
-			days := make([]mallow.Option, 7)
-			for d, name := range dayNames {
-				days[d] = mallow.Option{Value: strconv.Itoa(d), Label: name}
-			}
-			mallow.Segmented(c, "添加到", &t.ui.addDay, days)
+// start adds a task without a title yet and opens it, the keyboard in its
+// title: due today in the views of days, in the week shown in the week
+// view (today, if that is this week, else its Monday), and in the list in a
+// list's view.
+func (t *Todo) start() {
+	t.closeOpen()
+	k := Task{}
+	today := t.Today()
+	switch t.ui.view {
+	case viewToday, viewNext7, viewAll:
+		k.Due = today
+	case viewWeek:
+		k.Due = t.ui.monday
+		if mondayOf(today) == t.ui.monday {
+			k.Due = today
 		}
-		if input.Submitted() {
-			k := Task{Title: t.ui.draft}
-			switch t.ui.view {
-			case viewToday, viewNext7:
-				k.Due = t.Today()
-			case viewWeek:
-				d, _ := strconv.Atoi(t.ui.addDay)
-				k.Due = addDays(t.ui.monday, d)
-			default:
-				k.List, _ = viewList(t.ui.view)
-			}
-			if t.ui.addWeekly {
-				k.Repeat = RepeatWeekly
-			}
-			if t.Add(k) != nil {
-				t.ui.addWeekly = false
-			}
-			t.ui.draft = ""
-		}
-	})
+	default:
+		k.List, _ = viewList(t.ui.view)
+	}
+	t.ui.open = t.Start(k).ID
+	t.ui.focus = focusTitle
+}
+
+// closeOpen closes the task that is open; one never given a title goes.
+func (t *Todo) closeOpen() {
+	t.Drop(t.ui.open)
+	t.ui.open = 0
+	if t.ui.focus == focusTitle {
+		t.ui.focus = ""
+	}
+}
+
+// openTask opens a task's details, closing those of the one that was open.
+func (t *Todo) openTask(id int) {
+	if id != t.ui.open {
+		t.closeOpen()
+		t.ui.open = id
+	}
 }
 
 // withOpen keeps the task that is open in the list: edited so that the
@@ -502,7 +490,7 @@ func (t *Todo) row(c *ui.Context, k *Task, dated bool) {
 			}
 		})
 		if body.Clicked() {
-			t.ui.open = k.ID
+			t.openTask(k.ID)
 		}
 	})
 }
@@ -528,22 +516,28 @@ func (t *Todo) detail(c *ui.Context, k *Task) {
 		})
 	}
 	card := mallow.Card(c, mallow.Small).Margin(10, 4).Padding(12, 16, 16, 12).Gap(12)
-	card.OnShortcut(0, ui.KeyEscape, func() { t.ui.open = 0 })
+	card.OnShortcut(0, ui.KeyEscape, func() { t.closeOpen() })
 	card.Children(func() {
 		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 			done := k.Done
 			if mallow.CheckMark(c, &done, "完成这项任务").Changed() {
 				t.SetDone(k, done)
 			}
-			if mallow.TextInput(c, &k.Title).Placeholder("任务标题").Label("任务标题").Grow(1).MinWidth(0).Margin(0, 8, 0, 4).Changed() {
+			title := mallow.TextInput(c, &k.Title).Placeholder("要做什么？").Label("任务标题").Grow(1).MinWidth(0).Margin(0, 8, 0, 4).
+				FocusBind(&t.ui.focus, focusTitle)
+			if title.Changed() {
 				t.Changed(k)
+			}
+			// Enter is done writing: the details close.
+			if title.Submitted() {
+				t.closeOpen()
 			}
 			if mallow.GhostIconButton(c, "删除任务", mallow.GlyphTrash, mallow.IconButtonStyle{Danger: true}).Clicked() {
 				t.Remove(k)
 				t.ui.open = 0
 			}
 			if mallow.GhostIconButton(c, "关闭详情", mallow.GlyphClose, mallow.IconButtonStyle{}).Clicked() {
-				t.ui.open = 0
+				t.closeOpen()
 			}
 		})
 		ui.Column(c).Padding(0, 4, 0, 36).Gap(14).Children(func() {

@@ -172,16 +172,37 @@ func TestTodoContextMenus(t *testing.T) {
 	}
 }
 
-// A task is made to repeat weekly as it is added, or from its menu.
+// The + opens a new task's details at once: what repeats is set there
+// before the title is done. One left without a title is not kept.
+func TestTodoStart(t *testing.T) {
+	d, tt := newTodoTester(t)
+	click(t, tt, "添加任务", "每周", "任务标题")
+	tt.Type("Check upstream")
+	tt.Key(0, ui.KeyEnter)
+	if ks := d.Tasks(); len(ks) != 1 || ks[0].Title != "Check upstream" || ks[0].Repeat != todo.RepeatWeekly {
+		t.Fatalf("after starting a weekly task: %+v", ks)
+	}
+	click(t, tt, "添加任务")
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if n := len(d.Tasks()); n != 1 {
+		t.Fatalf("%d tasks after starting one and leaving it blank", n)
+	}
+	// Starting another closes the one that was open.
+	click(t, tt, "添加任务", "添加任务")
+	tt.Type("Buy milk")
+	tt.Key(0, ui.KeyEnter)
+	if ks := d.Tasks(); len(ks) != 2 || ks[1].Title != "Buy milk" {
+		t.Fatalf("after starting twice and writing once: %+v", ks)
+	}
+}
+
+// A task is made to repeat weekly from its menu.
 func TestTodoWeeklyRepeat(t *testing.T) {
 	d, tt := newTodoTester(t)
-	click(t, tt, "每周重复")
 	add(t, tt, "Check upstream")
 	add(t, tt, "Buy milk")
 	ks := d.Tasks()
-	if ks[0].Repeat != todo.RepeatWeekly || ks[1].Repeat != todo.RepeatNone {
-		t.Fatalf("repeats after adding one weekly and one plain: %q, %q", ks[0].Repeat, ks[1].Repeat)
-	}
 	rightClick(t, tt, "打开Buy milk")
 	click(t, tt, "设为每周重复")
 	if ks[1].Repeat != todo.RepeatWeekly || ks[1].Due == "" {
@@ -196,16 +217,20 @@ func TestTodoWeeklyRepeat(t *testing.T) {
 
 func TestTodoWeekView(t *testing.T) {
 	d, tt := newTodoTester(t)
-	click(t, tt, "按周", "周日")
+	// Added in this week, a task is due today; in another, on its Monday.
+	click(t, tt, "按周")
 	add(t, tt, "大扫除")
-	k := d.Tasks()[0]
-	day, err := time.Parse("2006-01-02", k.Due)
-	if err != nil || day.Weekday() != time.Sunday {
-		t.Fatalf("task added to Sunday in the week view: %+v", k)
+	if k := d.Tasks()[0]; k.Due != d.Today() {
+		t.Fatalf("task added in this week is due %s, today is %s", k.Due, d.Today())
 	}
 	click(t, tt, "下一周")
 	if tt.HasText("大扫除") {
 		t.Errorf("next week shows this week's task")
+	}
+	add(t, tt, "Water plants")
+	day, err := time.Parse("2006-01-02", d.Tasks()[1].Due)
+	if err != nil || day.Weekday() != time.Monday || d.Tasks()[1].Due <= d.Today() {
+		t.Fatalf("task added in next week: %+v", d.Tasks()[1])
 	}
 }
 

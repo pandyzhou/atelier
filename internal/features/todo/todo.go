@@ -85,6 +85,8 @@ func newAt(s *store.Store, now func() time.Time) *Todo {
 	if !t.data.Migrated {
 		t.migrateWeekly()
 	}
+	// Tasks started and never given a title.
+	t.data.Tasks = slices.DeleteFunc(t.data.Tasks, func(k *Task) bool { return strings.TrimSpace(k.Title) == "" })
 	t.ui = newViewState(t.now())
 	return t
 }
@@ -136,6 +138,31 @@ func (t *Todo) Add(k Task) *Task {
 	t.data.Tasks = append(t.data.Tasks, &k)
 	t.save()
 	return &k
+}
+
+// Start adds a task that has no title yet, to be written in its details,
+// and returns it. One left without a title is dropped: by Drop when its
+// details close, and on the next start if the app closed before that.
+func (t *Todo) Start(k Task) *Task {
+	if k.Repeat != RepeatNone && k.Due == "" {
+		k.Due = t.Today()
+	}
+	t.data.Next++
+	k.ID = t.data.Next
+	t.data.Tasks = append(t.data.Tasks, &k)
+	t.save()
+	return &k
+}
+
+// Drop removes the task of an ID if it has no title, and reports whether
+// it did.
+func (t *Todo) Drop(id int) bool {
+	k := t.Task(id)
+	if k == nil || strings.TrimSpace(k.Title) != "" {
+		return false
+	}
+	t.Remove(k)
+	return true
 }
 
 // Changed saves after a task or a list was edited in place, and keeps what
