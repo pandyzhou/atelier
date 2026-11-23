@@ -11,14 +11,14 @@ import (
 	"github.com/pandyzhou/mallow"
 
 	"github.com/pandyzhou/atelier/internal/feature"
-	"github.com/pandyzhou/atelier/internal/features/weekly"
+	"github.com/pandyzhou/atelier/internal/features/todo"
 	"github.com/pandyzhou/atelier/internal/store"
 )
 
 // features lists the app's features in sidebar order. Add new ones here.
 func features(s *store.Store) []feature.Feature {
 	return []feature.Feature{
-		weekly.New(s),
+		todo.New(s),
 	}
 }
 

@@ -1,0 +1,255 @@
+// Package todo is the to-do list: tasks in lists, each with an optional due
+// date, a priority, a note and a repeat, seen through views (today, the
+// next seven days, a week, everything, what is done) or list by list.
+package todo
+
+import (
+	"cmp"
+	"log"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/pandyzhou/atelier/internal/store"
+)
+
+// dateLayout is how dates are saved: "2026-11-23", which sort as the days do.
+const dateLayout = "2006-01-02"
+
+// Inbox is the List of a task that is in no list of the user's.
+const Inbox = 0
+
+// Priorities.
+const (
+	PriorityNone = iota
+	PriorityLow
+	PriorityMid
+	PriorityHigh
+)
+
+// Repeats.
+const (
+	RepeatNone    = ""
+	RepeatDaily   = "daily"
+	RepeatWeekly  = "weekly"
+	RepeatMonthly = "monthly"
+)
+
+// Task is one thing to do.
+type Task struct {
+	ID       int    `json:"id"`
+	Title    string `json:"title"`
+	Note     string `json:"note,omitempty"`
+	List     int    `json:"list,omitempty"`
+	Due      string `json:"due,omitempty"` // a date, "" for none
+	Priority int    `json:"priority,omitempty"`
+	// Repeat makes the task come back: checked off, it leaves a done copy
+	// and moves its Due to the next time. A repeating task has a Due.
+	Repeat string `json:"repeat,omitempty"`
+	Done   bool   `json:"done,omitempty"`
+	DoneAt string `json:"doneAt,omitempty"` // the date it was checked off
+}
+
+// List is a list of the user's.
+type List struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// data is what is saved.
+type data struct {
+	Next  int     `json:"next"`
+	Lists []*List `json:"lists"`
+	Tasks []*Task `json:"tasks"`
+	// Migrated is set once the weekly checklist's data was taken over.
+	Migrated bool `json:"migrated,omitempty"`
+}
+
+// Todo is the feature.
+type Todo struct {
+	store *store.Store
+	data  data
+	now   func() time.Time
+	ui    viewState
+}
+
+// New loads the saved tasks from s, taking over the weekly checklist's on
+// the first run.
+func New(s *store.Store) *Todo { return newAt(s, time.Now) }
+
+func newAt(s *store.Store, now func() time.Time) *Todo {
+	t := &Todo{store: s, now: now}
+	if err := s.Load(t.ID(), &t.data); err != nil {
+		log.Printf("todo: load: %v", err)
+	}
+	if !t.data.Migrated {
+		t.migrateWeekly()
+	}
+	t.ui = newViewState(t.now())
+	return t
+}
+
+func (t *Todo) ID() string    { return "todo" }
+func (t *Todo) Title() string { return "待办" }
+
+// Today is today's date.
+func (t *Todo) Today() string { return t.now().Format(dateLayout) }
+
+// Lists returns the user's lists, in the order they were made.
+func (t *Todo) Lists() []*List { return t.data.Lists }
+
+// Tasks returns every task.
+func (t *Todo) Tasks() []*Task { return t.data.Tasks }
+
+// ListName names a list: 收集箱 for the inbox, and for a list that is gone.
+func (t *Todo) ListName(id int) string {
+	for _, l := range t.data.Lists {
+		if l.ID == id {
+			return l.Name
+		}
+	}
+	return "收集箱"
+}
+
+// Task returns the task of an ID, nil if there is none.
+func (t *Todo) Task(id int) *Task {
+	for _, k := range t.data.Tasks {
+		if k.ID == id {
+			return k
+		}
+	}
+	return nil
+}
+
+// Add adds a task and returns it, nil for a blank title. A repeat without a
+// due date starts today.
+func (t *Todo) Add(k Task) *Task {
+	k.Title = strings.TrimSpace(k.Title)
+	if k.Title == "" {
+		return nil
+	}
+	if k.Repeat != RepeatNone && k.Due == "" {
+		k.Due = t.Today()
+	}
+	t.data.Next++
+	k.ID = t.data.Next
+	t.data.Tasks = append(t.data.Tasks, &k)
+	t.save()
+	return &k
+}
+
+// Changed saves after a task or a list was edited in place, and keeps what
+// must hold: a repeating task has a due date.
+func (t *Todo) Changed(k *Task) {
+	if k != nil && k.Repeat != RepeatNone && k.Due == "" {
+		k.Due = t.Today()
+	}
+	t.save()
+}
+
+// SetDone checks a task off, or not. Checking off a repeating task leaves a
+// done copy of it and moves the task to its next time.
+func (t *Todo) SetDone(k *Task, done bool) {
+	today := t.Today()
+	switch {
+	case done && k.Repeat != RepeatNone:
+		cp := *k
+		t.data.Next++
+		cp.ID, cp.Repeat, cp.Done, cp.DoneAt = t.data.Next, RepeatNone, true, today
+		t.data.Tasks = append(t.data.Tasks, &cp)
+		k.Due = nextDue(k.Due, k.Repeat, today)
+	case done:
+		k.Done, k.DoneAt = true, today
+	default:
+		k.Done, k.DoneAt = false, ""
+	}
+	t.save()
+}
+
+// nextDue is when a task due on due comes back: one step on, and further
+// while that is still before today.
+func nextDue(due, repeat, today string) string {
+	d, err := time.Parse(dateLayout, due)
+	if err != nil {
+		d, _ = time.Parse(dateLayout, today)
+	}
+	for {
+		switch repeat {
+		case RepeatDaily:
+			d = d.AddDate(0, 0, 1)
+		case RepeatMonthly:
+			d = d.AddDate(0, 1, 0)
+		default:
+			d = d.AddDate(0, 0, 7)
+		}
+		if s := d.Format(dateLayout); s >= today {
+			return s
+		}
+	}
+}
+
+// Remove deletes a task.
+func (t *Todo) Remove(k *Task) {
+	t.data.Tasks = slices.DeleteFunc(t.data.Tasks, func(x *Task) bool { return x == k })
+	t.save()
+}
+
+// AddList makes a list and returns it, nil for a blank name.
+func (t *Todo) AddList(name string) *List {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	t.data.Next++
+	l := &List{ID: t.data.Next, Name: name}
+	t.data.Lists = append(t.data.Lists, l)
+	t.save()
+	return l
+}
+
+// RemoveList deletes a list; its tasks go to the inbox.
+func (t *Todo) RemoveList(id int) {
+	t.data.Lists = slices.DeleteFunc(t.data.Lists, func(l *List) bool { return l.ID == id })
+	for _, k := range t.data.Tasks {
+		if k.List == id {
+			k.List = Inbox
+		}
+	}
+	t.save()
+}
+
+func (t *Todo) save() {
+	if err := t.store.Save(t.ID(), t.data); err != nil {
+		log.Printf("todo: save: %v", err)
+	}
+}
+
+// byOrder sorts tasks for a list: the earlier due first, those without a
+// date last, then the higher priority, then the older.
+func byOrder(a, b *Task) int {
+	if (a.Due == "") != (b.Due == "") {
+		if a.Due == "" {
+			return 1
+		}
+		return -1
+	}
+	return cmp.Or(cmp.Compare(a.Due, b.Due), cmp.Compare(b.Priority, a.Priority), cmp.Compare(a.ID, b.ID))
+}
+
+// addDays returns the date n days after date.
+func addDays(date string, n int) string {
+	d, err := time.Parse(dateLayout, date)
+	if err != nil {
+		return date
+	}
+	return d.AddDate(0, 0, n).Format(dateLayout)
+}
+
+// mondayOf returns the Monday of date's week.
+func mondayOf(date string) string {
+	d, err := time.Parse(dateLayout, date)
+	if err != nil {
+		return date
+	}
+	return d.AddDate(0, 0, -((int(d.Weekday()) + 6) % 7)).Format(dateLayout)
+}
