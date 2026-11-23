@@ -218,8 +218,14 @@ func (t *Todo) main(c *ui.Context) {
 	ui.Column(c).Grow(1).MinWidth(0).Gap(20).Padding(24, 0, 0, 0).Children(func() {
 		ui.Column(c).PaddingX(28).Children(func() { t.heading(c, groups) })
 		ui.Column(c).Grow(1).MinHeight(0).Padding(0, 0, 8, 0).Children(func() {
+			// A groove parts where tasks are added from the tasks. Under a
+			// field that is itself a line, as neumorphism's, it would be
+			// a second line: there the field's own does.
 			if t.ui.view != viewDone {
 				t.adder(c)
+				if t.ui.view == viewWeek || mallow.CurrentLook() != mallow.Neumorphism {
+					mallow.Groove(c).Margin(0, 24, 4, 24)
+				}
 			}
 			ui.Scroll(c).Grow(1).Padding(4, 20, 16, 20).Gap(2).Children(func() {
 				for i, g := range groups {
@@ -419,7 +425,10 @@ func (t *Todo) group(c *ui.Context, g group) {
 				if len(g.tasks) > 0 {
 					ui.Text(c, strconv.Itoa(len(g.tasks))).FontSize(12).TextColor(mallow.Muted)
 				}
-				ui.Text(c, g.note).Grow(1).FontSize(12).TextColor(mallow.Muted)
+				// A groove runs on from the heading to the far end, and
+				// sets the group apart from the one above.
+				ui.Text(c, g.note).FontSize(12).TextColor(mallow.Muted)
+				mallow.Groove(c).Grow(1).Margin(0, 0, 0, 8)
 			})
 			if head.Clicked() {
 				if t.ui.folded == nil {
