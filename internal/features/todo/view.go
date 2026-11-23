@@ -53,10 +53,10 @@ const (
 // View builds the page: the views and lists to choose from, the tasks of
 // the one chosen, and the details of the task opened, if one is.
 func (t *Todo) View(c *ui.Context) {
-	// The page is one card, its parts set apart by grooves; the padding
-	// around it leaves its shadow room.
-	ui.Row(c).Fill().Padding(8, 28, 4, 16).AlignItems(ui.Stretch).Children(func() {
-		mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0).Margin(0, 0, 20, 0).Children(func() {
+	// The page is one card, as tall as the sidebar beside it, its parts set
+	// apart by grooves.
+	ui.Row(c).Fill().Padding(0, 28, 0, 16).AlignItems(ui.Stretch).Children(func() {
+		mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0).Children(func() {
 			ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 				t.nav(c)
 				mallow.GrooveV(c).Margin(24, 0)

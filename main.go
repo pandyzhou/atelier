@@ -140,8 +140,8 @@ func (a *app) settingsPage(c *ui.Context) {
 			control()
 		})
 	}
-	ui.Row(c).Fill().Padding(8, 28, 4, 16).AlignItems(ui.Stretch).Children(func() {
-		mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0).Margin(0, 0, 20, 0).Children(func() {
+	ui.Row(c).Fill().Padding(0, 28, 0, 16).AlignItems(ui.Stretch).Children(func() {
+		mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0).Children(func() {
 			// The rows run the width of the card, as a feature's page does:
 			// the groove under each leads from its name to its control.
 			ui.Scroll(c).Grow(1).Padding(24, 28).Children(func() { a.settingsRows(c, row) })
