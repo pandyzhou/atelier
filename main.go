@@ -39,6 +39,7 @@ type app struct {
 	features []feature.Feature
 	selected string        // the ID of the feature shown, or settingsID
 	before   string        // the feature the settings were opened from
+	section  string        // the part of the settings shown
 	win      mallow.Window // the window, for the title bar's buttons; nil in tests
 }
 
@@ -130,10 +131,39 @@ func version() string {
 	return "开发版"
 }
 
-// settingsPage is the page of the shell's own preferences, one card as a
-// feature's page is: each a row, its name and what it is about to the left
-// and its control to the right.
+// settingsSection is a part of the settings, an entry of the menu down the
+// side of their page.
+type settingsSection struct {
+	id, title string
+	// rows builds the section's settings with row: each a line, its name
+	// and what it is about to the left and its control to the right, as
+	// wide as width, or as it asks when that is 0.
+	rows func(c *ui.Context, row func(name, note string, width float32, control func()))
+}
+
+// settingsSections lists the parts of the settings, in the menu's order.
+// Add new ones here.
+func (a *app) settingsSections() []settingsSection {
+	return []settingsSection{
+		{"look", "界面", a.lookSettings},
+		{"about", "关于", a.aboutSettings},
+	}
+}
+
+// settingsPage is the page of the shell's own preferences, laid out as a
+// feature's page is: one card, the menu of sections down its side and,
+// past a groove, the section chosen.
 func (a *app) settingsPage(c *ui.Context) {
+	sections := a.settingsSections()
+	chosen := sections[0]
+	items := make([]mallow.Item, len(sections))
+	for i, s := range sections {
+		items[i] = mallow.Item{ID: s.id, Label: s.title}
+		if s.id == a.section {
+			chosen = s
+		}
+	}
+	a.section = chosen.id
 	row := func(name, note string, width float32, control func()) {
 		ui.Row(c).Padding(16, 4).Gap(24).AlignItems(ui.Center).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
@@ -149,18 +179,34 @@ func (a *app) settingsPage(c *ui.Context) {
 			}
 		})
 	}
+	// Between two rows of a section, a groove.
+	first := true
+	divided := func(name, note string, width float32, control func()) {
+		if !first {
+			mallow.Groove(c)
+		}
+		first = false
+		row(name, note, width, control)
+	}
 	ui.Row(c).Fill().Padding(0, 28, 0, 16).AlignItems(ui.Stretch).Children(func() {
 		mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0).Children(func() {
-			// The rows run the width of the card, as a feature's page does:
-			// the groove under each leads from its name to its control.
-			ui.Scroll(c).Grow(1).Padding(24, 28).Children(func() { a.settingsRows(c, row) })
+			ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
+				ui.Scroll(c).Width(208).Shrink(0).Padding(24, 12, 16, 12).Gap(12).Children(func() {
+					mallow.Label(c, "设置").PaddingX(12)
+					mallow.SourceList(c, "设置", &a.section, items)
+				})
+				mallow.GrooveV(c).Margin(24, 0)
+				ui.Scroll(c.Key(chosen.id)).Grow(1).MinWidth(0).Padding(24, 28).Children(func() {
+					ui.Text(c, chosen.title).FontSize(28).FontWeight(600).TextColor(mallow.Text).Margin(0, 0, 12, 0)
+					chosen.rows(c, divided)
+				})
+			})
 		})
 	})
 }
 
-// settingsRows are the settings themselves, under the page's heading.
-func (a *app) settingsRows(c *ui.Context, row func(name, note string, width float32, control func())) {
-	ui.Text(c, "设置").FontSize(28).FontWeight(600).TextColor(mallow.Text).Margin(0, 0, 12, 0)
+// lookSettings are how the app looks.
+func (a *app) lookSettings(c *ui.Context, row func(name, note string, width float32, control func())) {
 	row("风格", "界面的样子：柔和凹凸的新拟态，或者大地色的自然有机", 200, func() {
 		style := a.settings.Style
 		if style == "" {
@@ -174,7 +220,6 @@ func (a *app) settingsRows(c *ui.Context, row func(name, note string, width floa
 			a.saveSettings()
 		}
 	})
-	mallow.Groove(c)
 	row("外观", "浅色、深色，或者跟随系统", 200, func() {
 		if mallow.Segmented(c, "外观", &a.settings.Appearance, []mallow.Option{
 			{Value: string(mallow.ModeLight), Label: "浅色"},
@@ -184,7 +229,10 @@ func (a *app) settingsRows(c *ui.Context, row func(name, note string, width floa
 			a.saveSettings()
 		}
 	})
-	mallow.Groove(c)
+}
+
+// aboutSettings say what the app is.
+func (a *app) aboutSettings(c *ui.Context, row func(name, note string, width float32, control func())) {
 	row("版本", "Atelier 个人工作室", 0, func() {
 		ui.Text(c, version()).FontSize(14).TextColor(mallow.Muted)
 	})
