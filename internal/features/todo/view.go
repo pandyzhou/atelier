@@ -56,22 +56,14 @@ func (t *Todo) View(c *ui.Context) {
 	// The page is one card, its parts set apart by grooves; the padding
 	// around it leaves its shadow room.
 	ui.Row(c).Fill().Padding(8, 28, 4, 16).AlignItems(ui.Stretch).Children(func() {
-		card := mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0).Margin(0, 0, 20, 0)
-		wide := card.Bounds().W >= 1000
-		card.Children(func() {
+		mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0).Margin(0, 0, 20, 0).Children(func() {
 			ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 				t.nav(c)
 				mallow.GrooveV(c).Margin(24, 0)
 				t.main(c)
-				// The details have their place while there is room for it,
-				// as the card was wide in the last frame.
-				switch {
-				case open != nil:
+				if open != nil {
 					mallow.GrooveV(c).Margin(24, 0)
 					t.detail(c.Key(open.ID), open)
-				case wide:
-					mallow.GrooveV(c).Margin(24, 0)
-					t.noDetail(c)
 				}
 			})
 		})
@@ -242,16 +234,6 @@ func (t *Todo) main(c *ui.Context) {
 				}
 			})
 		})
-	})
-}
-
-// noDetail stands where a task's details go while none is open.
-func (t *Todo) noDetail(c *ui.Context) {
-	ui.Column(c).Width(detailWidth).Shrink(0).Padding(24).Gap(16).Justify(ui.Center).AlignItems(ui.Center).Children(func() {
-		mallow.Recessed(ui.Row(c).Size(72, 72).Radius(36).Justify(ui.Center).AlignItems(ui.Center), mallow.Small).Children(func() {
-			mallow.GlyphList(c, mallow.Muted)
-		})
-		ui.Text(c, "点一个任务，在这里看它的详情").FontSize(13).TextColor(mallow.Muted).TextAlign(ui.Center)
 	})
 }
 
