@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -532,7 +533,10 @@ func (t *Todo) detail(c *ui.Context, k *Task) {
 			if title.Submitted() {
 				t.closeOpen()
 			}
-			if mallow.GhostIconButton(c, "删除任务", mallow.GlyphTrash, mallow.IconButtonStyle{Danger: true}).Clicked() {
+			// A task not given a title yet has nothing to delete: closing
+			// it drops it.
+			if strings.TrimSpace(k.Title) != "" &&
+				mallow.GhostIconButton(c, "删除任务", mallow.GlyphTrash, mallow.IconButtonStyle{Danger: true}).Clicked() {
 				t.Remove(k)
 				t.ui.open = 0
 			}
