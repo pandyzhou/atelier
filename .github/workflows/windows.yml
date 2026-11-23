@@ -31,6 +31,19 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          cache: false # 缓存在下一步自己管
+
+      # Go 的模块和编译缓存。setup-go 自带的缓存只认 go.sum：升级一次 mallow
+      # 就整个作废，MyGo 也得重编。这里对不上时退回最近一次的缓存，只重编
+      # 变了的部分。
+      - name: 缓存 Go
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-${{ runner.os }}-
 
       - name: 测试
         run: |
