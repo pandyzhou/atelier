@@ -19,6 +19,8 @@ type viewState struct {
 	addDay    string    // the day the week view's adder adds to, "0" to "6"
 	calMonth  time.Time // the month the details' calendar shows
 	calFor    int       // the task that month was set for
+	// folded holds the groups folded away, as "<view>/<heading>".
+	folded map[string]bool
 }
 
 func newViewState(now time.Time) viewState {
@@ -31,7 +33,7 @@ func newViewState(now time.Time) viewState {
 }
 
 const (
-	navWidth    = 192
+	navWidth    = 208
 	detailWidth = 316
 )
 
@@ -42,37 +44,55 @@ func (t *Todo) View(c *ui.Context) {
 	// The page is one card, its parts set apart by grooves; the padding
 	// around it leaves its shadow room.
 	ui.Row(c).Fill().Padding(8, 28, 4, 16).AlignItems(ui.Stretch).Children(func() {
-		mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0).Margin(0, 0, 20, 0).Children(func() {
+		card := mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0).Margin(0, 0, 20, 0)
+		wide := card.Bounds().W >= 1000
+		card.Children(func() {
 			ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 				t.nav(c)
 				mallow.GrooveV(c).Margin(24, 0)
 				t.main(c)
-				if open != nil {
+				// The details have their place while there is room for it,
+				// as the card was wide in the last frame.
+				switch {
+				case open != nil:
 					mallow.GrooveV(c).Margin(24, 0)
 					t.detail(c.Key(open.ID), open)
+				case wide:
+					mallow.GrooveV(c).Margin(24, 0)
+					t.noDetail(c)
 				}
 			})
 		})
 	})
 }
 
-// nav lists the views, then the inbox and the user's lists, and adds a list.
+// nav lists the views and the inbox, then the user's lists, where one is
+// added, then what is done: each with how many tasks it has still to do.
 func (t *Todo) nav(c *ui.Context) {
-	ui.Scroll(c).Width(navWidth).Shrink(0).Padding(20, 16, 16, 16).Gap(12).Children(func() {
-		mallow.Label(c, "视图").PaddingX(8)
-		mallow.NavList(c, "视图", &t.ui.view, []mallow.Item{
-			{ID: viewToday, Label: "今天"},
-			{ID: viewNext7, Label: "最近 7 天"},
-			{ID: viewWeek, Label: "按周"},
-			{ID: viewAll, Label: "全部"},
-			{ID: viewDone, Label: "已完成"},
-		})
-		mallow.Label(c, "清单").Padding(12, 8, 0, 8)
-		lists := []mallow.Item{{ID: listView(Inbox), Label: "收集箱"}}
-		for _, l := range t.data.Lists {
-			lists = append(lists, mallow.Item{ID: listView(l.ID), Label: l.Name})
+	item := func(view, label string, glyph func(*ui.Context, ui.Color)) mallow.Item {
+		it := mallow.Item{ID: view, Label: label, Glyph: glyph}
+		if n := t.openIn(view); n > 0 && view != viewDone {
+			it.Note = strconv.Itoa(n)
 		}
-		mallow.NavList(c, "清单", &t.ui.view, lists)
+		return it
+	}
+	ui.Scroll(c).Width(navWidth).Shrink(0).Padding(20, 12, 16, 12).Gap(12).Children(func() {
+		mallow.SourceList(c, "视图", &t.ui.view, []mallow.Item{
+			item(viewToday, "今天", mallow.GlyphCalendar),
+			item(viewNext7, "最近 7 天", mallow.GlyphCalendar),
+			item(viewWeek, "按周", mallow.GlyphCalendar),
+			item(viewAll, "全部", mallow.GlyphList),
+			item(listView(Inbox), "收集箱", mallow.GlyphInbox),
+		})
+		mallow.Groove(c).MarginX(4)
+		mallow.Label(c, "清单").PaddingX(12)
+		if len(t.data.Lists) > 0 {
+			lists := make([]mallow.Item, len(t.data.Lists))
+			for i, l := range t.data.Lists {
+				lists[i] = item(listView(l.ID), l.Name, mallow.GlyphList)
+			}
+			mallow.SourceList(c, "清单", &t.ui.view, lists)
+		}
 		input := mallow.TextInput(c, &t.ui.listDraft).Placeholder("+ 新建清单").Label("新建清单").Padding(8, 12)
 		if input.Submitted() {
 			if l := t.AddList(t.ui.listDraft); l != nil {
@@ -80,7 +100,22 @@ func (t *Todo) nav(c *ui.Context) {
 			}
 			t.ui.listDraft = ""
 		}
+		mallow.Groove(c).MarginX(4)
+		mallow.SourceList(c, "其他", &t.ui.view, []mallow.Item{item(viewDone, "已完成", mallow.GlyphDone)})
 	})
+}
+
+// openIn counts the tasks still to do that a view lists.
+func (t *Todo) openIn(view string) int {
+	n := 0
+	for _, g := range t.groups(view, mondayOf(t.Today())) {
+		for _, k := range g.tasks {
+			if !k.Done {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // main is the view chosen: its heading, then a card with the line that
@@ -103,6 +138,16 @@ func (t *Todo) main(c *ui.Context) {
 				}
 			})
 		})
+	})
+}
+
+// noDetail stands where a task's details go while none is open.
+func (t *Todo) noDetail(c *ui.Context) {
+	ui.Column(c).Width(detailWidth).Shrink(0).Padding(24).Gap(16).Justify(ui.Center).AlignItems(ui.Center).Children(func() {
+		mallow.Recessed(ui.Row(c).Size(72, 72).Radius(36).Justify(ui.Center).AlignItems(ui.Center), mallow.Small).Children(func() {
+			mallow.GlyphList(c, mallow.Muted)
+		})
+		ui.Text(c, "点一个任务，在这里看它的详情").FontSize(13).TextColor(mallow.Muted).TextAlign(ui.Center)
 	})
 }
 
@@ -179,9 +224,11 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 // adder is the line that adds a task to the view: due today in the views of
 // days, on the day chosen in the week view, and into the list in a list's.
 func (t *Todo) adder(c *ui.Context) {
-	ui.Row(c).Shrink(0).Padding(0, 24, 16, 24).Gap(16).AlignItems(ui.Center).Children(func() {
+	// The week view's days go under the input: beside it they leave it no
+	// room once the details show.
+	ui.Column(c).Shrink(0).Padding(0, 24, 16, 24).Gap(12).Children(func() {
 		input := mallow.TextInput(c, &t.ui.draft).Placeholder("+ 添加任务，回车确认").Label("添加任务").
-			Grow(1).MinWidth(0).Padding(10, 14)
+			Padding(10, 14)
 		if t.ui.view == viewWeek {
 			days := make([]mallow.Option, 7)
 			for d, name := range dayNames {
@@ -208,20 +255,38 @@ func (t *Todo) adder(c *ui.Context) {
 
 // group is a heading, if it has one, and the tasks under it.
 func (t *Todo) group(c *ui.Context, g group) {
+	fold := t.ui.view + "/" + g.title
+	folded := g.title != "" && t.ui.folded[fold]
 	ui.Column(c).Gap(2).Children(func() {
 		if g.title != "" {
-			ui.Row(c).Padding(18, 8, 6, 8).Gap(8).AlignItems(ui.Center).Children(func() {
+			// The heading folds the group away, and back.
+			verb, mark := "收起", "▾"
+			if folded {
+				verb, mark = "展开", "▸"
+			}
+			head := mallow.Plain(c, verb+g.title).Margin(12, 0, 2, 0).Padding(6, 8, 6, 4).Gap(8)
+			head.Children(func() {
+				ui.Text(c, mark).Width(12).FontSize(11).TextColor(mallow.Muted)
 				title := ui.Text(c, g.title).FontSize(14).FontWeight(600).TextColor(mallow.Text)
 				if g.accent {
 					title.TextColor(mallow.Accent)
 				}
-				ui.Text(c, g.note).Grow(1).FontSize(12).TextColor(mallow.Muted)
 				if len(g.tasks) > 0 {
 					ui.Text(c, strconv.Itoa(len(g.tasks))).FontSize(12).TextColor(mallow.Muted)
 				}
+				ui.Text(c, g.note).Grow(1).FontSize(12).TextColor(mallow.Muted)
 			})
+			if head.Clicked() {
+				if t.ui.folded == nil {
+					t.ui.folded = map[string]bool{}
+				}
+				t.ui.folded[fold] = !folded
+			}
 		} else {
 			ui.Box(c).Height(8)
+		}
+		if folded {
+			return
 		}
 		for _, k := range g.tasks {
 			t.row(c.Key(k.ID), k, g.dated)

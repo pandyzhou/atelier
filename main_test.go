@@ -112,6 +112,23 @@ func TestTodoWeekView(t *testing.T) {
 	}
 }
 
+// A group's heading folds its tasks away and back; the list's count stays.
+func TestTodoFold(t *testing.T) {
+	_, tt := newTodoTester(t)
+	add(t, tt, "Buy milk")
+	if !tt.HasText("1") {
+		t.Errorf("the nav shows no count for today's one task")
+	}
+	click(t, tt, "收起今天")
+	if tt.HasText("Buy milk") {
+		t.Errorf("the folded group still shows its task")
+	}
+	click(t, tt, "展开今天")
+	if !tt.HasText("Buy milk") {
+		t.Errorf("the unfolded group does not show its task")
+	}
+}
+
 // TestScreenshot renders the window without opening it and writes a PNG to
 // the path in ATELIER_SCREENSHOT, to look at the UI from scripts:
 //

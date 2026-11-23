@@ -6,7 +6,7 @@ tool github.com/egoist/mygo/cmd/mygo
 
 require (
 	github.com/egoist/mygo v0.10.0
-	github.com/pandyzhou/mallow v0.1.8
+	github.com/pandyzhou/mallow v0.1.9
 )
 
 require (
