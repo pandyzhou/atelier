@@ -142,11 +142,9 @@ func (a *app) settingsPage(c *ui.Context) {
 	}
 	ui.Row(c).Fill().Padding(8, 28, 4, 16).AlignItems(ui.Stretch).Children(func() {
 		mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0).Margin(0, 0, 20, 0).Children(func() {
-			// The rows are no wider than reads well: in a wide window a
-			// control at the far end is far from its name.
-			ui.Scroll(c).Grow(1).Padding(24, 28).Children(func() {
-				ui.Column(c).MaxWidth(680).Children(func() { a.settingsRows(c, row) })
-			})
+			// The rows run the width of the card, as a feature's page does:
+			// the groove under each leads from its name to its control.
+			ui.Scroll(c).Grow(1).Padding(24, 28).Children(func() { a.settingsRows(c, row) })
 		})
 	})
 }
