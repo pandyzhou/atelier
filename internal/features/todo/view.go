@@ -11,18 +11,19 @@ import (
 
 // viewState is what the page shows, which is not saved.
 type viewState struct {
-	view        string    // the view chosen
-	open        int       // the ID of the task whose details show, 0 for none
-	draft       string    // what is typed in the adder
-	listDraft   string    // what is typed in the new list's input
-	monday      string    // the Monday of the week the week view shows
-	addDay      string    // the day the week view's adder adds to, "0" to "6"
-	calMonth    time.Time // the month the details' calendar shows
-	calFor      int       // the task that month was set for
-	renaming    int       // the list whose name is being changed, 0 for none
-	renameDraft string    // what is typed as its new name
-	addingList  bool      // the new list's field shows
-	focus       string    // what has the keyboard, of what is bound to it
+	view        string           // the view chosen
+	open        int              // the ID of the task whose details show, 0 for none
+	draft       string           // what is typed in the adder
+	listDraft   string           // what is typed in the new list's input
+	monday      string           // the Monday of the week the week view shows
+	addDay      string           // the day the week view's adder adds to, "0" to "6"
+	calMonth    time.Time        // the month the details' calendar shows
+	calFor      int              // the task that month was set for
+	renaming    int              // the list whose name is being changed, 0 for none
+	renameDraft string           // what is typed as its new name
+	menus       map[string]*bool // the context menus that show, see menuOpen
+	addingList  bool             // the new list's field shows
+	focus       string           // what has the keyboard, of what is bound to it
 	// folded holds the groups folded away, as "<view>/<heading>".
 	folded map[string]bool
 }
@@ -107,6 +108,7 @@ func (t *Todo) nav(c *ui.Context) {
 			lists := make([]mallow.Item, len(t.data.Lists))
 			for i, l := range t.data.Lists {
 				lists[i] = item(listView(l.ID), l.Name, mallow.GlyphList)
+				lists[i].With = func(c *ui.Context, entry ui.Element) { t.listMenu(c, entry, l.ID) }
 			}
 			mallow.SourceList(c, "清单", &t.ui.view, lists)
 		}
@@ -133,6 +135,66 @@ func (t *Todo) nav(c *ui.Context) {
 		mallow.Groove(c).MarginX(4)
 		mallow.SourceList(c, "其他", &t.ui.view, []mallow.Item{item(viewDone, "已完成", mallow.GlyphDone)})
 	})
+}
+
+// menuOpen is the bool a context menu keeps: whether the menu of key shows.
+func (t *Todo) menuOpen(key string) *bool {
+	if t.ui.menus == nil {
+		t.ui.menus = map[string]*bool{}
+	}
+	if t.ui.menus[key] == nil {
+		t.ui.menus[key] = new(bool)
+	}
+	return t.ui.menus[key]
+}
+
+// listMenu is what a right click on a list of the nav offers.
+func (t *Todo) listMenu(c *ui.Context, entry ui.Element, id int) {
+	switch mallow.ContextMenu(c, entry, t.menuOpen(listView(id)), []mallow.MenuEntry{
+		{ID: "rename", Label: "重命名", Glyph: mallow.GlyphEdit},
+		{ID: "delete", Label: "删除清单", Glyph: mallow.GlyphTrash, Danger: true},
+	}) {
+	case "rename":
+		t.ui.view = listView(id)
+		t.ui.renaming, t.ui.renameDraft, t.ui.focus = id, t.ListName(id), focusRename
+	case "delete":
+		t.RemoveList(id)
+		if t.ui.view == listView(id) {
+			t.ui.view = listView(Inbox)
+		}
+	}
+}
+
+// taskMenu is what a right click on a task's row offers.
+func (t *Todo) taskMenu(c *ui.Context, row ui.Element, k *Task) {
+	today := t.Today()
+	check := mallow.MenuEntry{ID: "done", Label: "标为完成", Glyph: mallow.GlyphCheck}
+	if k.Done {
+		check.Label = "标为未完成"
+	}
+	switch mallow.ContextMenu(c, row, t.menuOpen("task:"+strconv.Itoa(k.ID)), []mallow.MenuEntry{
+		{ID: "edit", Label: "编辑", Glyph: mallow.GlyphEdit},
+		check,
+		{ID: "today", Label: "改到今天", Glyph: mallow.GlyphCalendar},
+		{ID: "tomorrow", Label: "改到明天", Glyph: mallow.GlyphCalendar},
+		{ID: "delete", Label: "删除任务", Glyph: mallow.GlyphTrash, Danger: true},
+	}) {
+	case "edit":
+		t.ui.open = k.ID
+	case "done":
+		t.SetDone(k, !k.Done)
+	case "today":
+		k.Due = today
+		t.Changed(k)
+	case "tomorrow":
+		k.Due = addDays(today, 1)
+		t.Changed(k)
+	case "delete":
+		if t.ui.open == k.ID {
+			t.ui.open = 0
+		}
+		t.Remove(k)
+	}
 }
 
 // openIn counts the tasks still to do that a view lists.
@@ -370,7 +432,9 @@ func priorityColor(p int) ui.Color {
 // already, as its due date and its list.
 func (t *Todo) row(c *ui.Context, k *Task, dated bool) {
 	today := t.Today()
-	mallow.ListRow(c, t.ui.open == k.ID).Children(func() {
+	row := mallow.ListRow(c, t.ui.open == k.ID)
+	defer func() { t.taskMenu(c, row, k) }()
+	row.Children(func() {
 		done := k.Done
 		if mallow.CheckMark(c, &done, "完成"+k.Title).Changed() {
 			t.SetDone(k, done)

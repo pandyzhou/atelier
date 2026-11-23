@@ -122,6 +122,51 @@ func TestTodoListNames(t *testing.T) {
 	}
 }
 
+// rightClick opens the context menu of what is labelled so.
+func rightClick(t *testing.T, tt *ui.Tester, label string) {
+	t.Helper()
+	if err := tt.RightClick(label); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+}
+
+// A right click on a list renames or deletes it; on a task, it edits it.
+func TestTodoContextMenus(t *testing.T) {
+	d, tt := newTodoTester(t)
+	click(t, tt, "新建清单")
+	tt.Type("Work")
+	tt.Key(0, ui.KeyEnter)
+	click(t, tt, "今天")
+	rightClick(t, tt, "Work")
+	click(t, tt, "重命名")
+	tt.Type("2")
+	tt.Key(0, ui.KeyEnter)
+	if got := d.Lists()[0].Name; got != "Work2" {
+		t.Fatalf("the list renamed from its menu is %q", got)
+	}
+
+	click(t, tt, "今天")
+	add(t, tt, "Buy milk")
+	rightClick(t, tt, "打开Buy milk")
+	click(t, tt, "改到明天")
+	if k := d.Tasks()[0]; k.Due == d.Today() {
+		t.Fatalf("the task moved to tomorrow is due %s, today", k.Due)
+	}
+	click(t, tt, "最近 7 天")
+	rightClick(t, tt, "打开Buy milk")
+	click(t, tt, "删除任务")
+	if len(d.Tasks()) != 0 {
+		t.Errorf("tasks after deleting from the menu: %+v", d.Tasks())
+	}
+
+	rightClick(t, tt, "Work2")
+	click(t, tt, "删除清单")
+	if len(d.Lists()) != 0 {
+		t.Errorf("lists after deleting from the menu: %+v", d.Lists())
+	}
+}
+
 func TestTodoWeekView(t *testing.T) {
 	d, tt := newTodoTester(t)
 	click(t, tt, "按周", "周日")
@@ -197,6 +242,10 @@ func TestScreenshot(t *testing.T) {
 		click(t, tt, strings.Split(s, ",")...)
 	}
 	tt.Move(5, 400)
+	// ATELIER_SCREENSHOT_RIGHTCLICK opens the context menu of a label.
+	if s := os.Getenv("ATELIER_SCREENSHOT_RIGHTCLICK"); s != "" {
+		rightClick(t, tt, s)
+	}
 	// Let the 200 ms transitions finish before taking the picture.
 	tt.Advance(time.Second)
 	f, err := os.Create(path)
