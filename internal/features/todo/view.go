@@ -11,16 +11,18 @@ import (
 
 // viewState is what the page shows, which is not saved.
 type viewState struct {
-	view       string    // the view chosen
-	open       int       // the ID of the task whose details show, 0 for none
-	draft      string    // what is typed in the adder
-	listDraft  string    // what is typed in the new list's input
-	monday     string    // the Monday of the week the week view shows
-	addDay     string    // the day the week view's adder adds to, "0" to "6"
-	calMonth   time.Time // the month the details' calendar shows
-	calFor     int       // the task that month was set for
-	addingList bool      // the new list's field shows
-	focus      string    // what has the keyboard, of what is bound to it
+	view        string    // the view chosen
+	open        int       // the ID of the task whose details show, 0 for none
+	draft       string    // what is typed in the adder
+	listDraft   string    // what is typed in the new list's input
+	monday      string    // the Monday of the week the week view shows
+	addDay      string    // the day the week view's adder adds to, "0" to "6"
+	calMonth    time.Time // the month the details' calendar shows
+	calFor      int       // the task that month was set for
+	renaming    int       // the list whose name is being changed, 0 for none
+	renameDraft string    // what is typed as its new name
+	addingList  bool      // the new list's field shows
+	focus       string    // what has the keyboard, of what is bound to it
 	// folded holds the groups folded away, as "<view>/<heading>".
 	folded map[string]bool
 }
@@ -34,7 +36,11 @@ func newViewState(now time.Time) viewState {
 	}
 }
 
-const focusNewList = "new-list"
+// What the keyboard is asked to go to, in viewState.focus.
+const (
+	focusNewList = "new-list"
+	focusRename  = "rename"
+)
 
 const (
 	navWidth    = 208
@@ -107,14 +113,21 @@ func (t *Todo) nav(c *ui.Context) {
 		if t.ui.addingList {
 			input := mallow.TextInput(c, &t.ui.listDraft).Placeholder("清单的名字，回车确认").Label("清单的名字").
 				Margin(0, 8).FocusBind(&t.ui.focus, focusNewList)
+			// Enter adds the list and shows it; leaving the field adds it
+			// too, without leaving what was gone to; Escape drops it.
+			cancelled := false
+			input.OnShortcut(0, ui.KeyEscape, func() { cancelled = true })
 			switch {
+			case cancelled:
+				t.ui.listDraft, t.ui.addingList, t.ui.focus = "", false, ""
 			case input.Submitted():
 				if l := t.AddList(t.ui.listDraft); l != nil {
 					t.ui.view = listView(l.ID)
 				}
 				t.ui.listDraft, t.ui.addingList, t.ui.focus = "", false, ""
 			case t.ui.focus != focusNewList:
-				t.ui.addingList = t.ui.listDraft != ""
+				t.AddList(t.ui.listDraft)
+				t.ui.listDraft, t.ui.addingList = "", false
 			}
 		}
 		mallow.Groove(c).MarginX(4)
@@ -212,7 +225,11 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 	}
 	ui.Row(c).Shrink(0).PaddingX(4).Gap(16).AlignItems(ui.End).Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
-			ui.Text(c, title).FontSize(28).FontWeight(600).TextColor(mallow.Text).SingleLine()
+			if isList && t.ui.renaming == list {
+				t.rename(c, list)
+			} else {
+				ui.Text(c, title).FontSize(28).FontWeight(600).TextColor(mallow.Text).SingleLine()
+			}
 			ui.Text(c, note).FontSize(14).TextColor(mallow.Muted)
 		})
 		switch {
@@ -229,12 +246,35 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 				}
 			})
 		case isList && list != Inbox:
+			if mallow.IconButton(c, "重命名清单", mallow.GlyphEdit, mallow.IconButtonStyle{Size: 36}).Clicked() {
+				t.ui.renaming, t.ui.renameDraft, t.ui.focus = list, title, focusRename
+			}
 			if mallow.IconButton(c, "删除清单（任务移到收集箱）", mallow.GlyphClose, mallow.IconButtonStyle{Size: 36, Danger: true}).Clicked() {
 				t.RemoveList(list)
 				t.ui.view = listView(Inbox)
 			}
 		}
 	})
+}
+
+// rename is the field a list's name is changed in, in the place of the
+// heading: Enter, or leaving it, keeps the new name; Escape the old one.
+func (t *Todo) rename(c *ui.Context, list int) {
+	input := mallow.TextInput(c, &t.ui.renameDraft).Label("清单的新名字").
+		FontSize(24).Padding(2, 4).FocusBind(&t.ui.focus, focusRename)
+	cancelled := false
+	input.OnShortcut(0, ui.KeyEscape, func() { cancelled = true })
+	switch {
+	case cancelled:
+	case input.Submitted(), t.ui.focus != focusRename:
+		t.RenameList(list, t.ui.renameDraft)
+	default:
+		return
+	}
+	t.ui.renaming = 0
+	if t.ui.focus == focusRename {
+		t.ui.focus = ""
+	}
 }
 
 // adder is the line that adds a task to the view: due today in the views of

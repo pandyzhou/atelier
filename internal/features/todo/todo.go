@@ -207,6 +207,17 @@ func (t *Todo) AddList(name string) *List {
 	return l
 }
 
+// RenameList gives a list a new name; a blank one is not taken.
+func (t *Todo) RenameList(id int, name string) {
+	name = strings.TrimSpace(name)
+	for _, l := range t.data.Lists {
+		if l.ID == id && name != "" && name != l.Name {
+			l.Name = name
+			t.save()
+		}
+	}
+}
+
 // RemoveList deletes a list; its tasks go to the inbox.
 func (t *Todo) RemoveList(id int) {
 	t.data.Lists = slices.DeleteFunc(t.data.Lists, func(l *List) bool { return l.ID == id })

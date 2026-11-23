@@ -97,6 +97,31 @@ func TestTodoLists(t *testing.T) {
 	}
 }
 
+// A new list's name is kept when its field is left, dropped on Escape, and
+// can be changed afterwards.
+func TestTodoListNames(t *testing.T) {
+	d, tt := newTodoTester(t)
+	click(t, tt, "新建清单")
+	tt.Type("Work")
+	click(t, tt, "全部")
+	if len(d.Lists()) != 1 || d.Lists()[0].Name != "Work" {
+		t.Fatalf("lists after leaving the field: %+v", d.Lists())
+	}
+	click(t, tt, "新建清单")
+	tt.Type("Nope")
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if len(d.Lists()) != 1 || tt.HasText("Nope") {
+		t.Fatalf("lists after Escape: %+v", d.Lists())
+	}
+	click(t, tt, "Work", "重命名清单")
+	tt.Type("2")
+	tt.Key(0, ui.KeyEnter)
+	if got := d.Lists()[0].Name; got != "Work2" {
+		t.Errorf("the list renamed is %q", got)
+	}
+}
+
 func TestTodoWeekView(t *testing.T) {
 	d, tt := newTodoTester(t)
 	click(t, tt, "按周", "周日")
