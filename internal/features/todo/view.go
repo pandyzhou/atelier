@@ -31,7 +31,7 @@ func newViewState(now time.Time) viewState {
 }
 
 const (
-	navWidth    = 168
+	navWidth    = 192
 	detailWidth = 316
 )
 
@@ -39,20 +39,26 @@ const (
 // the one chosen, and the details of the task opened, if one is.
 func (t *Todo) View(c *ui.Context) {
 	open := t.Task(t.ui.open)
-	// The cards stand on the surface itself: the padding leaves their
-	// shadows room.
-	ui.Row(c).Fill().Padding(8, 28, 4, 16).Gap(24).AlignItems(ui.Stretch).Children(func() {
-		t.nav(c)
-		t.main(c)
-		if open != nil {
-			t.detail(c.Key(open.ID), open)
-		}
+	// The page is one card, its parts set apart by grooves; the padding
+	// around it leaves its shadow room.
+	ui.Row(c).Fill().Padding(8, 28, 4, 16).AlignItems(ui.Stretch).Children(func() {
+		mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0).Margin(0, 0, 20, 0).Children(func() {
+			ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
+				t.nav(c)
+				mallow.GrooveV(c).Margin(24, 0)
+				t.main(c)
+				if open != nil {
+					mallow.GrooveV(c).Margin(24, 0)
+					t.detail(c.Key(open.ID), open)
+				}
+			})
+		})
 	})
 }
 
 // nav lists the views, then the inbox and the user's lists, and adds a list.
 func (t *Todo) nav(c *ui.Context) {
-	ui.Scroll(c).Width(navWidth).Shrink(0).Padding(4, 8, 16, 8).Gap(12).Children(func() {
+	ui.Scroll(c).Width(navWidth).Shrink(0).Padding(20, 16, 16, 16).Gap(12).Children(func() {
 		mallow.Label(c, "视图").PaddingX(8)
 		mallow.NavList(c, "视图", &t.ui.view, []mallow.Item{
 			{ID: viewToday, Label: "今天"},
@@ -81,9 +87,9 @@ func (t *Todo) nav(c *ui.Context) {
 // adds a task and the tasks in their groups.
 func (t *Todo) main(c *ui.Context) {
 	groups := t.groups(t.ui.view, t.ui.monday)
-	ui.Column(c).Grow(1).MinWidth(0).Gap(20).Children(func() {
-		t.heading(c, groups)
-		mallow.Card(c, mallow.Medium).Grow(1).MinHeight(0).Margin(0, 0, 20, 0).Padding(20, 0, 8, 0).Children(func() {
+	ui.Column(c).Grow(1).MinWidth(0).Gap(20).Padding(24, 0, 0, 0).Children(func() {
+		ui.Column(c).PaddingX(28).Children(func() { t.heading(c, groups) })
+		ui.Column(c).Grow(1).MinHeight(0).Padding(0, 0, 8, 0).Children(func() {
 			if t.ui.view != viewDone {
 				t.adder(c)
 				mallow.Groove(c).MarginX(24)
@@ -291,7 +297,7 @@ func (t *Todo) detail(c *ui.Context, k *Task) {
 		}
 	}
 	label := func(s string) { mallow.Label(c, s).Padding(8, 4, 0, 4) }
-	mallow.Card(c, mallow.Medium).Width(detailWidth).Shrink(0).Margin(0, 0, 20, 0).PaddingY(8).Children(func() {
+	ui.Column(c).Width(detailWidth).Shrink(0).PaddingY(8).Children(func() {
 		ui.Scroll(c).Grow(1).Padding(12, 20, 16, 20).Gap(10).Children(func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				done := k.Done
