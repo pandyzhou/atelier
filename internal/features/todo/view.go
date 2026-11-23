@@ -556,16 +556,19 @@ func (t *Todo) detail(c *ui.Context, k *Task) {
 							if q.date == "" {
 								k.Repeat = RepeatNone
 							}
+							t.ui.calOpen = false
 							t.Changed(k)
 						}
 					}
 					// The last chip is the day itself when it is none of
-					// those, and brings the calendar.
+					// those, and brings the calendar. It is on only as
+					// the day chosen: with the calendar open under one of
+					// the others, two would look chosen.
 					other := "其他日期"
 					if !quick {
 						other = shortDate(k.Due, today)
 					}
-					if mallow.Chip(c.Key("other"), other, !quick || t.ui.calOpen).Label("其他日期").Clicked() {
+					if mallow.Chip(c.Key("other"), other, !quick).Label("其他日期").Clicked() {
 						t.ui.calOpen = !t.ui.calOpen
 					}
 				})

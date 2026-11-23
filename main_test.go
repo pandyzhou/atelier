@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"image/png"
 	"os"
 	"strings"
@@ -194,6 +195,33 @@ func TestTodoStart(t *testing.T) {
 	tt.Key(0, ui.KeyEnter)
 	if ks := d.Tasks(); len(ks) != 2 || ks[1].Title != "Buy milk" {
 		t.Fatalf("after starting twice and writing once: %+v", ks)
+	}
+}
+
+// Of the chips for the day, one is chosen at a time: 其他日期 brings the
+// calendar without looking chosen beside another, and is the day itself
+// once one is picked there.
+func TestTodoOtherDate(t *testing.T) {
+	d, tt := newTodoTester(t)
+	add(t, tt, "Buy milk")
+	k := d.Tasks()[0]
+	click(t, tt, "打开Buy milk", "其他日期")
+	if !tt.HasText("其他日期") || k.Due != d.Today() {
+		t.Fatalf("opening the calendar changed the day to %q", k.Due)
+	}
+	day, _ := time.Parse("2006-01-02", d.Today())
+	far := day.AddDate(0, 0, 3)
+	if far.Month() != day.Month() {
+		far = day.AddDate(0, 0, -3)
+	}
+	click(t, tt, fmt.Sprintf("%d月%d日", int(far.Month()), far.Day()))
+	if k.Due != far.Format("2006-01-02") || !tt.HasText(fmt.Sprintf("%d月%d日", int(far.Month()), far.Day())) {
+		t.Fatalf("after picking a day in the calendar: due %q, texts %q", k.Due, tt.Texts())
+	}
+	// A quick day closes the calendar again.
+	click(t, tt, "无日期")
+	if k.Due != "" || tt.HasText("上个月") {
+		t.Errorf("after 无日期: due %q, the calendar still shows: %v", k.Due, tt.HasText("上个月"))
 	}
 }
 
