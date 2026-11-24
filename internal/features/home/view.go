@@ -470,7 +470,7 @@ func (h *Home) effort(c *ui.Context) {
 		ui.Text(c, "思考："+name).FontSize(13).TextColor(mallow.Muted).SingleLine()
 		mallow.GlyphChevronDown(c, mallow.Muted)
 	})
-	mallow.Tooltip(c, button, "模型回答前想多久。模型不支持时会报错，改回“默认”即可")
+	mallow.Tooltip(c, button, "模型回答前想多久。模型不支持时可能不起作用或报错，报错就改回“默认”")
 	if button.Clicked() {
 		h.ui.efforting = !h.ui.efforting
 	}

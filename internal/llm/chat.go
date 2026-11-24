@@ -108,6 +108,8 @@ type Request struct {
 	// Effort is how hard the model is to think: Low, Medium or High, or ""
 	// to say nothing of it, which leaves the model as its service has it.
 	// A model or a service that does not know of it may refuse the request.
+	// Of Anthropic's kind only its newer models are asked: the older ones,
+	// and other services' models, have no efforts, and are left as they are.
 	Effort string
 	// OnThinking is given what the model thinks as it comes, by Stream,
 	// off the caller's thread: nil to leave it.
@@ -125,12 +127,9 @@ const (
 // much as they find fit: their thinking is of the answer's tokens.
 const maxThought = 16000
 
-// budgets are the tokens older models of Anthropic's, and services that
-// take its requests, are given to think with, by effort.
-var budgets = map[string]int{Low: 2048, Medium: 8192, High: 16384}
-
 // budgeted tells the models of Anthropic's that think by a budget of
-// tokens: those before the ones that think as much as they find fit.
+// tokens, not with an effort: those before the ones that think as much as
+// they find fit. They are asked nothing.
 var budgeted = regexp.MustCompile(`claude-(3|(opus|sonnet|haiku)-4-([015]|2\d{7})($|-))`)
 
 // think adds to a request's body what asks the model to think with the
@@ -151,10 +150,7 @@ func think(c Config, effort string, body map[string]any) {
 			body["thinking"] = map[string]any{"type": "adaptive", "display": "summarized"}
 			body["output_config"] = map[string]any{"effort": effort}
 			body["max_tokens"] = maxThought
-			return
 		}
-		body["thinking"] = map[string]any{"type": "enabled", "budget_tokens": budgets[effort]}
-		body["max_tokens"] = budgets[effort] + maxAnswer
 	}
 }
 

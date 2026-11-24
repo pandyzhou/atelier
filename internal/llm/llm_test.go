@@ -479,11 +479,11 @@ func TestEffort(t *testing.T) {
 		{Anthropic, "claude-opus-5-5", `{"content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"好"}]}`,
 			[]string{`"thinking":{"display":"summarized","type":"adaptive"}`, `"output_config":{"effort":"high"}`, `"max_tokens":16000`}, []string{"budget_tokens"}},
 		{Anthropic, "claude-sonnet-4-5", `{"content":[{"type":"text","text":"好"}]}`,
-			[]string{`"thinking":{"budget_tokens":16384,"type":"enabled"}`, `"max_tokens":20480`}, []string{"output_config"}},
+			[]string{`"max_tokens":4096`}, []string{"output_config", "thinking", "budget_tokens"}},
 		{Anthropic, "claude-opus-4-20250514", `{"content":[{"type":"text","text":"好"}]}`,
-			[]string{`"budget_tokens":16384`}, []string{"output_config"}},
+			nil, []string{"output_config", "thinking", "budget_tokens"}},
 		{Anthropic, "deepseek-reasoner", `{"content":[{"type":"text","text":"好"}]}`,
-			[]string{`"budget_tokens":16384`}, []string{"output_config"}},
+			nil, []string{"output_config", "thinking", "budget_tokens"}},
 	} {
 		s := newService(t, 200, c.done)
 		cfg := Config{Kind: c.kind, BaseURL: s.URL, Key: "k", Model: c.model}
