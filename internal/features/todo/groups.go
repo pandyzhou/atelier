@@ -3,13 +3,11 @@ package todo
 import (
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 )
 
-// The views: what the list in the middle of the page shows. A list of the
-// user's, or the inbox, is the view "list:<ID>".
+// The views: what the list in the middle of the page shows.
 const (
 	viewToday = "today"
 	viewNext7 = "next7"
@@ -17,18 +15,6 @@ const (
 	viewAll   = "all"
 	viewDone  = "done"
 )
-
-func listView(id int) string { return "list:" + strconv.Itoa(id) }
-
-// viewList returns the list a view shows, and whether it shows one.
-func viewList(view string) (int, bool) {
-	s, ok := strings.CutPrefix(view, "list:")
-	if !ok {
-		return 0, false
-	}
-	id, err := strconv.Atoi(s)
-	return id, err == nil
-}
 
 var dayNames = [7]string{"周一", "周二", "周三", "周四", "周五", "周六", "周日"}
 
@@ -103,12 +89,6 @@ func (t *Todo) groups(view, monday string) []group {
 		}
 		for i := range gs {
 			gs[i].note = ""
-		}
-	default:
-		id, _ := viewList(view)
-		gs = []group{
-			{tasks: t.pick(func(k *Task) bool { return open(k) && k.List == id })},
-			{title: "已完成", tasks: t.pick(func(k *Task) bool { return k.Done && k.List == id })},
 		}
 	}
 	return slices.DeleteFunc(gs, func(g group) bool { return len(g.tasks) == 0 && !g.accent })

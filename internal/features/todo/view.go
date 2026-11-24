@@ -13,18 +13,14 @@ import (
 
 // viewState is what the page shows, which is not saved.
 type viewState struct {
-	view        string           // the view chosen
-	open        int              // the ID of the task whose details show, 0 for none
-	listDraft   string           // what is typed in the new list's input
-	monday      string           // the Monday of the week the week view shows
-	calMonth    time.Time        // the month the details' calendar shows
-	calOpen     bool             // the details' calendar shows
-	calFor      int              // the task that month was set for
-	renaming    int              // the list whose name is being changed, 0 for none
-	renameDraft string           // what is typed as its new name
-	menus       map[string]*bool // the context menus that show, see menuOpen
-	addingList  bool             // the new list's field shows
-	focus       string           // what has the keyboard, of what is bound to it
+	view     string           // the view chosen
+	open     int              // the ID of the task whose details show, 0 for none
+	monday   string           // the Monday of the week the week view shows
+	calMonth time.Time        // the month the details' calendar shows
+	calOpen  bool             // the details' calendar shows
+	calFor   int              // the task that month was set for
+	menus    map[string]*bool // the context menus that show, see menuOpen
+	focus    string           // what has the keyboard, of what is bound to it
 	// folded holds the groups folded away, as "<view>/<heading>".
 	folded map[string]bool
 }
@@ -39,16 +35,14 @@ func newViewState(now time.Time) viewState {
 
 // What the keyboard is asked to go to, in viewState.focus.
 const (
-	focusNewList = "new-list"
-	focusRename  = "rename"
-	focusTitle   = "title"
+	focusTitle = "title"
 )
 
 const (
 	navWidth = 208
 )
 
-// View builds the page: the views and lists to choose from, the tasks of
+// View builds the page: the views to choose from, the tasks of
 // the one chosen, and the details of the task opened, if one is.
 func (t *Todo) View(c *ui.Context) {
 	// The page is one card, as tall as the sidebar beside it, its parts set
@@ -64,8 +58,8 @@ func (t *Todo) View(c *ui.Context) {
 	})
 }
 
-// nav lists the views, then the lists, the inbox first, where one is
-// added, then what is done: each with how many tasks it has still to do.
+// nav lists the views, then what is done: each with how many tasks it has
+// still to do.
 func (t *Todo) nav(c *ui.Context) {
 	item := func(view, label string, glyph func(*ui.Context, ui.Color)) mallow.Item {
 		it := mallow.Item{ID: view, Label: label, Glyph: glyph}
@@ -82,44 +76,6 @@ func (t *Todo) nav(c *ui.Context) {
 			item(viewAll, "全部", mallow.GlyphList),
 		})
 		mallow.Groove(c).MarginX(4)
-		// The + beside the heading brings the new list's field, which goes
-		// again once a list is added or the field is left.
-		ui.Row(c).Padding(0, 4, 0, 12).AlignItems(ui.Center).Children(func() {
-			mallow.Label(c, "清单").Grow(1)
-			if mallow.GhostIconButton(c, "新建清单", mallow.GlyphPlus, mallow.IconButtonStyle{}).Clicked() {
-				t.ui.addingList, t.ui.focus = true, focusNewList
-			}
-		})
-		// The inbox is the first of the lists: the one that is always
-		// there, for what has no other, and cannot be renamed or deleted.
-		lists := []mallow.Item{item(listView(Inbox), "收集箱", mallow.GlyphInbox)}
-		for _, l := range t.data.Lists {
-			it := item(listView(l.ID), l.Name, mallow.GlyphList)
-			it.With = func(c *ui.Context, entry ui.Element) { t.listMenu(c, entry, l.ID) }
-			lists = append(lists, it)
-		}
-		mallow.SourceList(c, "清单", &t.ui.view, lists)
-		if t.ui.addingList {
-			input := mallow.TextInput(c, &t.ui.listDraft).Placeholder("清单的名字，回车确认").Label("清单的名字").
-				Margin(0, 8).FocusBind(&t.ui.focus, focusNewList)
-			// Enter adds the list and shows it; leaving the field adds it
-			// too, without leaving what was gone to; Escape drops it.
-			cancelled := false
-			input.OnShortcut(0, ui.KeyEscape, func() { cancelled = true })
-			switch {
-			case cancelled:
-				t.ui.listDraft, t.ui.addingList, t.ui.focus = "", false, ""
-			case input.Submitted():
-				if l := t.AddList(t.ui.listDraft); l != nil {
-					t.ui.view = listView(l.ID)
-				}
-				t.ui.listDraft, t.ui.addingList, t.ui.focus = "", false, ""
-			case t.ui.focus != focusNewList:
-				t.AddList(t.ui.listDraft)
-				t.ui.listDraft, t.ui.addingList = "", false
-			}
-		}
-		mallow.Groove(c).MarginX(4)
 		mallow.SourceList(c, "其他", &t.ui.view, []mallow.Item{item(viewDone, "已完成", mallow.GlyphDone)})
 	})
 }
@@ -133,23 +89,6 @@ func (t *Todo) menuOpen(key string) *bool {
 		t.ui.menus[key] = new(bool)
 	}
 	return t.ui.menus[key]
-}
-
-// listMenu is what a right click on a list of the nav offers.
-func (t *Todo) listMenu(c *ui.Context, entry ui.Element, id int) {
-	switch mallow.ContextMenu(c, entry, t.menuOpen(listView(id)), []mallow.MenuEntry{
-		{ID: "rename", Label: "重命名", Glyph: mallow.GlyphEdit},
-		{ID: "delete", Label: "删除清单", Glyph: mallow.GlyphTrash, Danger: true},
-	}) {
-	case "rename":
-		t.ui.view = listView(id)
-		t.ui.renaming, t.ui.renameDraft, t.ui.focus = id, t.ListName(id), focusRename
-	case "delete":
-		t.RemoveList(id)
-		if t.ui.view == listView(id) {
-			t.ui.view = listView(Inbox)
-		}
-	}
 }
 
 // taskMenu is what a right click on a task's row offers.
@@ -236,7 +175,7 @@ func (t *Todo) emptyText() string {
 }
 
 // heading is the view's name, a line about it, and what acts on the view as
-// a whole: the week view's arrows, a list's delete button.
+// a whole: the week view's arrows.
 func (t *Todo) heading(c *ui.Context, groups []group) {
 	today := t.Today()
 	title, note := "", ""
@@ -253,7 +192,6 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 	} else {
 		note = "没有未完成的任务"
 	}
-	list, isList := viewList(t.ui.view)
 	switch t.ui.view {
 	case viewToday:
 		title, note = "今天", dayNote(today)+" · "+note
@@ -268,16 +206,10 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 		title = "全部"
 	case viewDone:
 		title, note = "已完成", "勾掉的任务都在这里"
-	default:
-		title = t.ListName(list)
 	}
 	ui.Row(c).Shrink(0).PaddingX(4).Gap(16).AlignItems(ui.End).Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
-			if isList && list != Inbox && t.ui.renaming == list {
-				t.rename(c, list)
-			} else {
-				ui.Text(c, title).FontSize(28).FontWeight(600).TextColor(mallow.Text).SingleLine()
-			}
+			ui.Text(c, title).FontSize(28).FontWeight(600).TextColor(mallow.Text).SingleLine()
 			ui.Text(c, note).FontSize(14).TextColor(mallow.Muted)
 		})
 		// What acts on the view, the + that adds a task last: it is at
@@ -291,8 +223,7 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 				t.start()
 			}
 		}()
-		switch {
-		case t.ui.view == viewWeek:
+		if t.ui.view == viewWeek {
 			ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
 				if mallow.IconButton(c, "上一周", mallow.GlyphChevronLeft, mallow.IconButtonStyle{Size: 36}).Clicked() {
 					t.ui.monday = addDays(t.ui.monday, -7)
@@ -304,56 +235,20 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 					t.ui.monday = addDays(t.ui.monday, 7)
 				}
 			})
-		case isList && list != Inbox:
-			if mallow.IconButton(c, "重命名清单", mallow.GlyphEdit, mallow.IconButtonStyle{Size: 36}).Clicked() {
-				t.ui.renaming, t.ui.renameDraft, t.ui.focus = list, title, focusRename
-			}
-			if mallow.IconButton(c, "删除清单（任务移到收集箱）", mallow.GlyphClose, mallow.IconButtonStyle{Size: 36, Danger: true}).Clicked() {
-				t.RemoveList(list)
-				t.ui.view = listView(Inbox)
-			}
 		}
 	})
 }
 
-// rename is the field a list's name is changed in, in the place of the
-// heading: Enter, or leaving it, keeps the new name; Escape the old one.
-func (t *Todo) rename(c *ui.Context, list int) {
-	input := mallow.TextInput(c, &t.ui.renameDraft).Label("清单的新名字").
-		FontSize(24).FocusBind(&t.ui.focus, focusRename)
-	cancelled := false
-	input.OnShortcut(0, ui.KeyEscape, func() { cancelled = true })
-	switch {
-	case cancelled:
-	case input.Submitted(), t.ui.focus != focusRename:
-		t.RenameList(list, t.ui.renameDraft)
-	default:
-		return
-	}
-	t.ui.renaming = 0
-	if t.ui.focus == focusRename {
-		t.ui.focus = ""
-	}
-}
-
 // start adds a task without a title yet and opens it, the keyboard in its
-// title: due today in the views of days, in the week shown in the week
-// view (today, if that is this week, else its Monday), and in the list in a
-// list's view.
+// title: due today, but in the week view in the week shown (today, if that
+// is this week, else its Monday).
 func (t *Todo) start() {
 	t.closeOpen()
 	k := Task{}
 	today := t.Today()
-	switch t.ui.view {
-	case viewToday, viewNext7, viewAll:
-		k.Due = today
-	case viewWeek:
+	k.Due = today
+	if t.ui.view == viewWeek && mondayOf(today) != t.ui.monday {
 		k.Due = t.ui.monday
-		if mondayOf(today) == t.ui.monday {
-			k.Due = today
-		}
-	default:
-		k.List, _ = viewList(t.ui.view)
 	}
 	t.ui.open = t.Start(k).ID
 	t.ui.focus = focusTitle
@@ -458,7 +353,7 @@ func priorityColor(p int) ui.Color {
 
 // row is a task in the list: its check, and the rest, which opens its
 // details: its priority, its title, then what the heading does not say
-// already, as its due date and its list.
+// already, as its due date.
 func (t *Todo) row(c *ui.Context, k *Task, dated bool) {
 	today := t.Today()
 	row := mallow.ListRow(c, false)
@@ -479,9 +374,6 @@ func (t *Todo) row(c *ui.Context, k *Task, dated bool) {
 			}
 			if k.Repeat != RepeatNone {
 				mallow.GlyphRepeat(c, mallow.Accent.Alpha(0.7))
-			}
-			if _, isList := viewList(t.ui.view); !isList && k.List != Inbox {
-				ui.Text(c, t.ListName(k.List)).FontSize(12).TextColor(mallow.Muted).SingleLine()
 			}
 			if k.Due != "" && !dated {
 				due := ui.Text(c, dayTitle(k.Due, today)).FontSize(12).TextColor(mallow.Muted).SingleLine()
@@ -600,20 +492,6 @@ func (t *Todo) detail(c *ui.Context, k *Task) {
 				}) {
 					t.Changed(k)
 				}
-			})
-			line("清单", 640, func() {
-				ui.Row(c).Grow(1).Gap(8).Wrap().Children(func() {
-					ids := []int{Inbox}
-					for _, l := range t.data.Lists {
-						ids = append(ids, l.ID)
-					}
-					for _, id := range ids {
-						if mallow.Chip(c.Key(id), t.ListName(id), k.List == id).Clicked() {
-							k.List = id
-							t.Changed(k)
-						}
-					}
-				})
 			})
 		})
 	})

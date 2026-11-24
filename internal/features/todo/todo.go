@@ -1,6 +1,6 @@
-// Package todo is the to-do list: tasks in lists, each with an optional due
-// date, a priority, a note and a repeat, seen through views (today, the
-// next seven days, a week, everything, what is done) or list by list.
+// Package todo is the to-do list: tasks, each with an optional due date, a
+// priority, a note and a repeat, seen through views (today, the next seven
+// days, a week, everything, what is done).
 package todo
 
 import (
@@ -15,9 +15,6 @@ import (
 
 // dateLayout is how dates are saved: "2026-11-23", which sort as the days do.
 const dateLayout = "2006-01-02"
-
-// Inbox is the List of a task that is in no list of the user's.
-const Inbox = 0
 
 // Priorities.
 const (
@@ -37,9 +34,11 @@ const (
 
 // Task is one thing to do.
 type Task struct {
-	ID       int    `json:"id"`
-	Title    string `json:"title"`
-	Note     string `json:"note,omitempty"`
+	ID    int    `json:"id"`
+	Title string `json:"title"`
+	Note  string `json:"note,omitempty"`
+	// List is the list the task was in when tasks had lists. Nothing
+	// shows it now; it is kept as it was saved.
 	List     int    `json:"list,omitempty"`
 	Due      string `json:"due,omitempty"` // a date, "" for none
 	Priority int    `json:"priority,omitempty"`
@@ -50,7 +49,7 @@ type Task struct {
 	DoneAt string `json:"doneAt,omitempty"` // the date it was checked off
 }
 
-// List is a list of the user's.
+// List is a list tasks were sorted into, when they were: see Task.List.
 type List struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
@@ -59,7 +58,7 @@ type List struct {
 // data is what is saved.
 type data struct {
 	Next  int     `json:"next"`
-	Lists []*List `json:"lists"`
+	Lists []*List `json:"lists,omitempty"` // of old, kept as saved
 	Tasks []*Task `json:"tasks"`
 	// Migrated is set once the weekly checklist's data was taken over.
 	Migrated bool `json:"migrated,omitempty"`
@@ -97,21 +96,8 @@ func (t *Todo) Title() string { return "待办" }
 // Today is today's date.
 func (t *Todo) Today() string { return t.now().Format(dateLayout) }
 
-// Lists returns the user's lists, in the order they were made.
-func (t *Todo) Lists() []*List { return t.data.Lists }
-
 // Tasks returns every task.
 func (t *Todo) Tasks() []*Task { return t.data.Tasks }
-
-// ListName names a list: 收集箱 for the inbox, and for a list that is gone.
-func (t *Todo) ListName(id int) string {
-	for _, l := range t.data.Lists {
-		if l.ID == id {
-			return l.Name
-		}
-	}
-	return "收集箱"
-}
 
 // Task returns the task of an ID, nil if there is none.
 func (t *Todo) Task(id int) *Task {
@@ -165,7 +151,7 @@ func (t *Todo) Drop(id int) bool {
 	return true
 }
 
-// Changed saves after a task or a list was edited in place, and keeps what
+// Changed saves after a task was edited in place, and keeps what
 // must hold: a repeating task has a due date.
 func (t *Todo) Changed(k *Task) {
 	if k != nil && k.Repeat != RepeatNone && k.Due == "" {
@@ -218,41 +204,6 @@ func nextDue(due, repeat, today string) string {
 // Remove deletes a task.
 func (t *Todo) Remove(k *Task) {
 	t.data.Tasks = slices.DeleteFunc(t.data.Tasks, func(x *Task) bool { return x == k })
-	t.save()
-}
-
-// AddList makes a list and returns it, nil for a blank name.
-func (t *Todo) AddList(name string) *List {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return nil
-	}
-	t.data.Next++
-	l := &List{ID: t.data.Next, Name: name}
-	t.data.Lists = append(t.data.Lists, l)
-	t.save()
-	return l
-}
-
-// RenameList gives a list a new name; a blank one is not taken.
-func (t *Todo) RenameList(id int, name string) {
-	name = strings.TrimSpace(name)
-	for _, l := range t.data.Lists {
-		if l.ID == id && name != "" && name != l.Name {
-			l.Name = name
-			t.save()
-		}
-	}
-}
-
-// RemoveList deletes a list; its tasks go to the inbox.
-func (t *Todo) RemoveList(id int) {
-	t.data.Lists = slices.DeleteFunc(t.data.Lists, func(l *List) bool { return l.ID == id })
-	for _, k := range t.data.Tasks {
-		if k.List == id {
-			k.List = Inbox
-		}
-	}
 	t.save()
 }
 

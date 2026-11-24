@@ -35,13 +35,12 @@ func equal(t *testing.T, what string, got []string, want ...string) {
 
 func TestViews(t *testing.T) {
 	d := newTest("")
-	work := d.AddList("工作")
 	d.Add(Task{Title: "过期的", Due: "2026-11-24"})
-	d.Add(Task{Title: "今天的", Due: "2026-11-25", List: work.ID})
+	d.Add(Task{Title: "今天的", Due: "2026-11-25"})
 	d.Add(Task{Title: "要紧的", Due: "2026-11-25", Priority: PriorityHigh})
 	d.Add(Task{Title: "周五的", Due: "2026-11-27"})
 	d.Add(Task{Title: "下个月的", Due: "2026-12-20"})
-	d.Add(Task{Title: "没日期的", List: work.ID})
+	d.Add(Task{Title: "没日期的"})
 	d.SetDone(d.Add(Task{Title: "做完的", Due: "2026-11-25"}), true)
 
 	equal(t, "today", titles(d, viewToday), "已过期: 过期的", "今天: 要紧的 今天的", "今天完成的: 做完的")
@@ -50,8 +49,6 @@ func TestViews(t *testing.T) {
 	equal(t, "all", titles(d, viewAll),
 		"已过期: 过期的", "今天: 要紧的 今天的", "最近 7 天: 周五的", "以后: 下个月的", "没有日期: 没日期的")
 	equal(t, "done", titles(d, viewDone), "今天完成: 做完的")
-	equal(t, "the list", titles(d, listView(work.ID)), ": 今天的 没日期的")
-	equal(t, "the inbox", titles(d, listView(Inbox)), ": 过期的 要紧的 周五的 下个月的", "已完成: 做完的")
 }
 
 func TestRepeat(t *testing.T) {
@@ -81,19 +78,21 @@ func TestRepeat(t *testing.T) {
 	}
 }
 
-func TestListsAndSaving(t *testing.T) {
+// Tasks are there again after a restart, those of a list of old too: lists
+// are gone, what was in them is not.
+func TestSaving(t *testing.T) {
 	dir := t.TempDir()
 	d := newTest(dir)
-	life := d.AddList("生活")
-	d.Add(Task{Title: "买菜", List: life.ID, Note: "鸡蛋", Priority: PriorityMid})
+	d.data.Lists = []*List{{ID: 7, Name: "生活"}}
+	d.Add(Task{Title: "买菜", List: 7, Note: "鸡蛋", Priority: PriorityMid})
 
 	again := newTest(dir)
-	if len(again.Lists()) != 1 || len(again.Tasks()) != 1 || again.Tasks()[0].Note != "鸡蛋" || again.ListName(life.ID) != "生活" {
-		t.Fatalf("after a restart: lists %+v, tasks %+v", again.Lists(), again.Tasks())
+	if len(again.Tasks()) != 1 || again.Tasks()[0].Note != "鸡蛋" {
+		t.Fatalf("after a restart: tasks %+v", again.Tasks())
 	}
-	again.RemoveList(life.ID)
-	if k := again.Tasks()[0]; k.List != Inbox || again.ListName(life.ID) != "收集箱" {
-		t.Errorf("after removing its list the task is in list %d", k.List)
+	equal(t, "all, with a task of a list of old", titles(again, viewAll), "今天:", "没有日期: 买菜")
+	if k := again.Tasks()[0]; k.List != 7 || len(again.data.Lists) != 1 {
+		t.Errorf("the list of old was not kept: task %+v, lists %+v", k, again.data.Lists)
 	}
 }
 

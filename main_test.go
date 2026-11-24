@@ -82,56 +82,6 @@ func TestTodoDetail(t *testing.T) {
 	}
 }
 
-func TestTodoLists(t *testing.T) {
-	d, tt := newTodoTester(t)
-	click(t, tt, "新建清单")
-	tt.Type("工作")
-	tt.Key(0, ui.KeyEnter)
-	if len(d.Lists()) != 1 {
-		t.Fatalf("lists %+v", d.Lists())
-	}
-	// The new list is shown: what is added goes into it, without a date.
-	add(t, tt, "回邮件")
-	k := d.Tasks()[0]
-	if k.List != d.Lists()[0].ID || k.Due != "" {
-		t.Fatalf("task added in the list: %+v", k)
-	}
-	click(t, tt, "删除清单（任务移到收集箱）")
-	if len(d.Lists()) != 0 || k.List != todo.Inbox || !tt.HasText("回邮件") {
-		t.Fatalf("after deleting the list: lists %+v, task %+v", d.Lists(), k)
-	}
-}
-
-// A new list's name is kept when its field is left, dropped on Escape, and
-// can be changed afterwards.
-func TestTodoListNames(t *testing.T) {
-	d, tt := newTodoTester(t)
-	click(t, tt, "新建清单")
-	tt.Type("Work")
-	click(t, tt, "全部")
-	if len(d.Lists()) != 1 || d.Lists()[0].Name != "Work" {
-		t.Fatalf("lists after leaving the field: %+v", d.Lists())
-	}
-	click(t, tt, "新建清单")
-	tt.Type("Nope")
-	tt.Key(0, ui.KeyEscape)
-	tt.Frame()
-	if len(d.Lists()) != 1 || tt.HasText("Nope") {
-		t.Fatalf("lists after Escape: %+v", d.Lists())
-	}
-	// The inbox has no name to change: its heading is its name.
-	click(t, tt, "收集箱")
-	if !tt.HasText("收集箱") || tt.HasText("清单的新名字") {
-		t.Errorf("the inbox shows a field for its name: %q", tt.Texts())
-	}
-	click(t, tt, "Work", "重命名清单")
-	tt.Type("2")
-	tt.Key(0, ui.KeyEnter)
-	if got := d.Lists()[0].Name; got != "Work2" {
-		t.Errorf("the list renamed is %q", got)
-	}
-}
-
 // rightClick opens the context menu of what is labelled so.
 func rightClick(t *testing.T, tt *ui.Tester, label string) {
 	t.Helper()
@@ -141,22 +91,9 @@ func rightClick(t *testing.T, tt *ui.Tester, label string) {
 	tt.Frame()
 }
 
-// A right click on a list renames or deletes it; on a task, it edits it.
+// A right click on a task edits it.
 func TestTodoContextMenus(t *testing.T) {
 	d, tt := newTodoTester(t)
-	click(t, tt, "新建清单")
-	tt.Type("Work")
-	tt.Key(0, ui.KeyEnter)
-	click(t, tt, "今天")
-	rightClick(t, tt, "Work")
-	click(t, tt, "重命名")
-	tt.Type("2")
-	tt.Key(0, ui.KeyEnter)
-	if got := d.Lists()[0].Name; got != "Work2" {
-		t.Fatalf("the list renamed from its menu is %q", got)
-	}
-
-	click(t, tt, "今天")
 	add(t, tt, "Buy milk")
 	rightClick(t, tt, "打开Buy milk")
 	click(t, tt, "改到明天")
@@ -169,11 +106,17 @@ func TestTodoContextMenus(t *testing.T) {
 	if len(d.Tasks()) != 0 {
 		t.Errorf("tasks after deleting from the menu: %+v", d.Tasks())
 	}
+}
 
-	rightClick(t, tt, "Work2")
-	click(t, tt, "删除清单")
-	if len(d.Lists()) != 0 {
-		t.Errorf("lists after deleting from the menu: %+v", d.Lists())
+// Tasks are not sorted into lists: nothing of lists shows.
+func TestTodoNoLists(t *testing.T) {
+	_, tt := newTodoTester(t)
+	add(t, tt, "Buy milk")
+	click(t, tt, "打开Buy milk")
+	for _, text := range []string{"清单", "收集箱", "新建清单"} {
+		if tt.HasText(text) {
+			t.Errorf("the page shows %q: %q", text, tt.Texts())
+		}
 	}
 }
 
@@ -306,20 +249,19 @@ func TestScreenshot(t *testing.T) {
 	d := a.current().(*todo.Todo)
 	today, _ := time.Parse("2006-01-02", d.Today())
 	day := func(n int) string { return today.AddDate(0, 0, n).Format("2006-01-02") }
-	work, life := d.AddList("工作"), d.AddList("生活")
 	for _, k := range []todo.Task{
-		{Title: "交水电费", Due: day(-1), List: life.ID, Priority: todo.PriorityHigh},
-		{Title: "写周报", Due: day(0), List: work.ID, Repeat: todo.RepeatWeekly, Priority: todo.PriorityMid},
-		{Title: "修登录页的 bug", Due: day(0), List: work.ID, Note: "复现步骤在群里"},
+		{Title: "交水电费", Due: day(-1), Priority: todo.PriorityHigh},
+		{Title: "写周报", Due: day(0), Repeat: todo.RepeatWeekly, Priority: todo.PriorityMid},
+		{Title: "修登录页的 bug", Due: day(0), Note: "复现步骤在群里"},
 		{Title: "跑步 30 分钟", Due: day(0), Repeat: todo.RepeatDaily},
-		{Title: "给家里打电话", Due: day(1), List: life.ID},
+		{Title: "给家里打电话", Due: day(1)},
 		{Title: "读完《置身事内》", Due: day(3), Priority: todo.PriorityLow},
-		{Title: "采购日用品", Due: day(5), List: life.ID},
+		{Title: "采购日用品", Due: day(5)},
 		{Title: "整理书架"},
 	} {
 		d.Add(k)
 	}
-	d.SetDone(d.Add(todo.Task{Title: "预约体检", Due: day(0), List: life.ID}), true)
+	d.SetDone(d.Add(todo.Task{Title: "预约体检", Due: day(0)}), true)
 	tt := ui.NewTester(a.view, 1280, 800)
 	if os.Getenv("ATELIER_SCREENSHOT_SCALE") == "2" {
 		tt.SetScale(2)
