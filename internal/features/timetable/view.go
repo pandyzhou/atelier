@@ -12,6 +12,10 @@ import (
 
 // viewState is what the page shows besides the timetable itself.
 type viewState struct {
+	// changing is whether the timetable is being changed: until the button
+	// that says so is clicked it only shows, and nothing on it does
+	// anything, as it mostly stays as it was set up.
+	changing bool
 	// editing is whether the dialog of a course shows, and draft the
 	// course in it: one to add while its ID is 0. problem is why it could
 	// not be kept.
@@ -56,7 +60,7 @@ func (t *Timetable) View(c *ui.Context) {
 			ui.Column(c).PaddingX(28).Children(func() { t.heading(c) })
 			t.grid(c)
 		})
-		if mallow.ContextMenu(c, page, t.menuOpen("page"), []mallow.MenuEntry{newEntry}) == newEntry.ID {
+		if t.ui.changing && mallow.ContextMenu(c, page, t.menuOpen("page"), []mallow.MenuEntry{newEntry}) == newEntry.ID {
 			t.startAdding(t.today(), 1, 1)
 		}
 	})
@@ -65,19 +69,30 @@ func (t *Timetable) View(c *ui.Context) {
 }
 
 // heading is the page's title, how many courses there are, and the button
-// to the day's periods.
+// that lets the timetable be changed; while it is, what to do, and the
+// button to the day's periods.
 func (t *Timetable) heading(c *ui.Context) {
-	note := "还没有课程"
+	note := "还没有课程，点右边的铅笔开始添加"
 	if n := len(t.data.Courses); n > 0 {
 		note = fmt.Sprintf("每周 %d 节课", n)
+	}
+	if t.ui.changing {
+		note = "点空格添加课程，按住拖过几节添加连上几节的课；点课程修改"
 	}
 	ui.Row(c).Shrink(0).PaddingX(4).Gap(16).AlignItems(ui.End).Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
 			ui.Text(c, "课表").FontSize(28).FontWeight(600).TextColor(mallow.Text).SingleLine()
 			ui.Text(c, note).FontSize(14).TextColor(mallow.Muted)
 		})
-		if mallow.Button(c, "节次时间").Clicked() {
+		if t.ui.changing && mallow.Button(c, "节次时间").Clicked() {
 			t.ui.periods = true
+		}
+		label := "编辑课表"
+		if t.ui.changing {
+			label = "完成编辑"
+		}
+		if mallow.IconButton(c, label, mallow.GlyphEdit, mallow.IconButtonStyle{Size: 36, Active: t.ui.changing}).Clicked() {
+			t.ui.changing, t.ui.span.on = !t.ui.changing, false
 		}
 	})
 }
@@ -172,8 +187,12 @@ func (t *Timetable) day(c *ui.Context, day int, row float32, hues map[string]ui.
 	column.Children(func() {
 		pressed := 0 // the period whose cell is pressed, 0 for none
 		for i := range t.data.Periods {
-			cell := ui.Column(c.Key(i)).Label(fmt.Sprintf("%s第%d节", dayNames[day], i+1)).Height(row).Cursor(ui.CursorPointer)
+			cell := ui.Column(c.Key(i)).Label(fmt.Sprintf("%s第%d节", dayNames[day], i+1)).Height(row)
 			cell.Children(func() { ui.Box(c).Height(1).Background(hairline()) })
+			if !t.ui.changing {
+				continue // it only shows
+			}
+			cell.Cursor(ui.CursorPointer)
 			if cell.Hovered() && !t.ui.span.on {
 				cell.Background(mallow.Text.Alpha(0.04))
 			}
@@ -216,15 +235,24 @@ const blockRadius = 10
 
 // block is a course on the grid, over its periods: raised from the
 // surface as the app's buttons are, faintly of its color, with a bar of it
-// at its left and its name written in it. A click opens it, a right click
-// offers that and to delete it.
+// at its left and its name written in it. While the timetable is being
+// changed a click opens it, and a right click offers that and to delete
+// it; else it only shows, and tells the whole of itself under the pointer.
 func (t *Timetable) block(c *ui.Context, k *Course, row float32, hue ui.Color) {
 	height := float32(k.To-k.From+1)*row - 9
-	b := mallow.Plain(c, "打开"+k.Name).Absolute().Left(5).Right(5).
+	var b ui.Element
+	if t.ui.changing {
+		b = mallow.Plain(c, "打开"+k.Name)
+	} else {
+		b = ui.Row(c).Label("课程：" + k.Name)
+	}
+	b.Absolute().Left(5).Right(5).
 		Top(float32(k.From-1)*row+5).Height(height).
 		Padding(7, 9, 7, 14).AlignItems(ui.Start).Radius(blockRadius)
 	tint := float32(0.08)
 	switch {
+	case !t.ui.changing:
+		mallow.Raised(b, 3)
 	case b.Pressed():
 		mallow.Recessed(b, mallow.Tiny)
 	case b.Hovered():
@@ -250,6 +278,16 @@ func (t *Timetable) block(c *ui.Context, k *Course, row float32, hue ui.Color) {
 			}
 		})
 	})
+	if !t.ui.changing {
+		about := k.Name + " · " + dayNames[k.Day] + t.spanNote(k.From, k.To)
+		for _, more := range []string{k.Room, k.Teacher} {
+			if more != "" {
+				about += " · " + more
+			}
+		}
+		mallow.Tooltip(c, b, about)
+		return
+	}
 	if b.Clicked() {
 		t.startEditing(k)
 	}

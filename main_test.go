@@ -536,6 +536,16 @@ func TestTimetable(t *testing.T) {
 		t.Fatalf("a new timetable has %d periods and %d courses", len(tb.Periods()), len(tb.Courses()))
 	}
 
+	// Until it is asked to be changed the timetable only shows: a click
+	// on a cell does nothing, and the periods' button is not there.
+	click(t, tt, "周三第3节")
+	if tt.HasText("新课程") || tt.HasText("节次时间") {
+		t.Fatalf("the timetable can be changed without asking: %q", tt.Texts())
+	}
+	click(t, tt, "编辑课表")
+	if !tt.HasText("节次时间") || !tt.HasText("完成编辑") {
+		t.Fatalf("after 编辑课表: %q", tt.Texts())
+	}
 	rightClick(t, tt, "周三第3节")
 	click(t, tt, "新课程")
 	if !tt.HasText("第 3 节") {
@@ -1989,4 +1999,43 @@ func TestThinking(t *testing.T) {
 	if shown(tb, "思考过程") != 2 || !tb.HasText("想了 1 秒") {
 		t.Errorf("after a restart, the conversation: %q", tb.Texts())
 	}
+}
+
+// TestTimetableOnlyShows checks that a timetable that is not being changed
+// shows its courses and lets none of them, nor a cell, be clicked into a
+// dialog; and that it is so again once the changing is done.
+func TestTimetableOnlyShows(t *testing.T) {
+	a := newTodoApp(store.Open(""))
+	a.win = &fakeWindow{}
+	tt := ui.NewTester(a.view, 1280, 800)
+	click(t, tt, "课表")
+	tb := a.current().(*timetable.Timetable)
+	if _, err := tb.Put(timetable.Course{Name: "高等数学", Room: "A301", Day: 0, From: 1, To: 2}); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	shows := func(when string) {
+		t.Helper()
+		if !tt.HasText("课程：高等数学") || tt.HasText("打开高等数学") || tt.HasText("节次时间") {
+			t.Fatalf("%s: %q", when, tt.Texts())
+		}
+		click(t, tt, "课程：高等数学")
+		click(t, tt, "周二第1节")
+		first, _ := tt.Find("周二第1节")
+		last, _ := tt.Find("周二第3节")
+		tt.Press(first.X+first.W/2, first.Y+first.H/2)
+		tt.Move(last.X+last.W/2, last.Y+last.H/2)
+		tt.Release(last.X+last.W/2, last.Y+last.H/2)
+		tt.Frame()
+		if tt.HasText("编辑课程") || tt.HasText("新课程") || len(tb.Courses()) != 1 {
+			t.Fatalf("%s, a click changes the timetable: %q", when, tt.Texts())
+		}
+	}
+	shows("at first")
+	click(t, tt, "编辑课表", "打开高等数学")
+	if !tt.HasText("编辑课程") {
+		t.Fatalf("while changing, a click on a course: %q", tt.Texts())
+	}
+	click(t, tt, "取消", "完成编辑")
+	shows("after the changing is done")
 }
