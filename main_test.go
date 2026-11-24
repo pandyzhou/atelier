@@ -2363,3 +2363,119 @@ func TestTrending(t *testing.T) {
 		t.Errorf("after a restart: %q", bt.Texts())
 	}
 }
+
+// TestAssistantReadsTrending checks that the assistant can tell of the
+// week's trending repositories and read a repository's README: read from
+// GitHub when what is at hand is none or old, off the UI's thread, with a
+// line in the conversation of what it read; and that a reading stopped in
+// the middle leaves the conversation one that can go on.
+func TestAssistantReadsTrending(t *testing.T) {
+	const page = `<article class="Box-row"><h2 class="h3"><a href="/acme/rocket"><span>acme /</span> rocket</a></h2>
+<p class="col-9">Rockets for agents</p><span itemprop="programmingLanguage">Go</span>
+<a href="/acme/rocket/stargazers">14,814</a><a href="/acme/rocket/forks">1,430</a><span>2,395 stars this week</span></article>`
+	a := newApp(store.Open(t.TempDir()))
+	a.win = &fakeWindow{}
+	key, err := a.box.Seal("k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.settings.Models = []modelConfig{{ID: 1, Name: "P", Kind: string(llm.Chat), Key: key, Models: []string{"m"}}}
+	a.settings.Model, a.settings.ModelName = 1, "m"
+	var tr *trending.Trending
+	for _, f := range a.features {
+		if f, ok := f.(*trending.Trending); ok {
+			tr = f
+		}
+	}
+	var fetched []string
+	stop := func() {}
+	tr.Fetch = func(_ context.Context, url string) ([]byte, error) {
+		fetched = append(fetched, url)
+		stop()
+		switch url {
+		case trending.Page:
+			return []byte(page), nil
+		case "https://raw.githubusercontent.com/solo/tiny/HEAD/README.md":
+			return []byte("<h1 align=\"center\">Tiny</h1>\n\n小而快。\n"), nil
+		}
+		return nil, trending.ErrNotFound
+	}
+	call := func(id, name, input string) llm.Call {
+		return llm.Call{ID: id, Name: name, Input: json.RawMessage(input)}
+	}
+	answers := []llm.Message{
+		{Role: llm.Assistant, Calls: []llm.Call{
+			call("c1", "list_trending", `{}`),
+			call("c2", "read_readme", `{"repo":"https://github.com/solo/tiny"}`),
+			call("c3", "read_readme", `{"repo":"nobody/nothing"}`),
+			call("c4", "read_readme", `{"repo":"not a repo"}`),
+		}},
+		{Role: llm.Assistant, Text: "这周最热的是 rocket。"},
+		{Role: llm.Assistant, Calls: []llm.Call{call("c5", "list_trending", `{}`), call("c6", "read_readme", `{"repo":"other/one"}`)}},
+		{Role: llm.Assistant, Text: "好。"},
+	}
+	var asked []llm.Request
+	a.complete = func(_ context.Context, _ llm.Config, r llm.Request, _ func(string)) (llm.Message, error) {
+		asked = append(asked, r)
+		return answers[len(asked)-1], nil
+	}
+	tt := ui.NewTester(a.view, 1280, 800)
+	h := a.current().(*home.Home)
+	say := func(text string) {
+		t.Helper()
+		click(t, tt, "给助手的话")
+		tt.Type(text)
+		tt.Key(0, ui.KeyEnter)
+		tt.Frame()
+	}
+	say("这周有什么热门项目")
+	if len(asked) != 2 {
+		t.Fatalf("asked %d times", len(asked))
+	}
+	names := map[string]bool{}
+	for _, tool := range asked[0].Tools {
+		names[tool.Name] = true
+	}
+	if !names["list_trending"] || !names["read_readme"] {
+		t.Errorf("the model has the tools %v", names)
+	}
+	got := asked[1].Messages
+	for i, want := range []string{"1. acme/rocket（Go） star 14814，本周 +2395：Rockets for agents", "# Tiny", "没有读到 nobody/nothing 的 README：这个仓库没有 README", "repo 要写成 owner/name"} {
+		if text := got[len(got)-4+i].Text; !strings.Contains(text, want) || strings.Contains(text, "align") {
+			t.Errorf("the model is told %q, not %q", text, want)
+		}
+	}
+	if len(tr.Repos()) != 1 || !slices.Contains(fetched, "https://raw.githubusercontent.com/solo/tiny/HEAD/README.md") {
+		t.Errorf("the list read is not kept, or the README not read: %d, %q", len(tr.Repos()), fetched)
+	}
+	if !tt.HasText("看了 GitHub 本周热门") || !tt.HasText("读了 solo/tiny 的 README") || tt.HasText("读了 nobody/nothing") || !tt.HasText("这周最热的是 rocket。") {
+		t.Errorf("the conversation shows %q", tt.Texts())
+	}
+	// Reading changed nothing of the user's: the answer can be asked again.
+	if !h.CanRegenerate() {
+		t.Errorf("a turn that only read cannot be regenerated")
+	}
+
+	// The list just read is told from what is at hand; a reading stopped
+	// in the middle answers its call and those after it, as stopped.
+	n := len(fetched)
+	stop = func() {
+		if len(fetched) > n {
+			h.Stop()
+		}
+	}
+	say("再看看 other/one")
+	if fetched[n] == trending.Page {
+		t.Errorf("a list just read is read again: %q", fetched[n:])
+	}
+	if len(asked) != 3 || tt.HasText("读了 other/one") || tt.HasText("停止") {
+		t.Fatalf("after stopping a reading: asked %d times, %q", len(asked), tt.Texts())
+	}
+	answers[3] = llm.Message{Role: llm.Assistant, Text: "好。"}
+	stop = func() {}
+	say("算了")
+	got = asked[3].Messages
+	if len(asked) != 4 || got[len(got)-2].Role != llm.Result || !strings.Contains(got[len(got)-2].Text, "没有执行") || got[len(got)-3].Role != llm.Result || !strings.Contains(got[len(got)-3].Text, "acme/rocket") {
+		t.Fatalf("after stopping, the model is sent %+v", got[len(got)-4:])
+	}
+}

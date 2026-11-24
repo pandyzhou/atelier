@@ -61,28 +61,80 @@ func (t *Trending) Open(name string) {
 	t.Background(func() func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		got := readme{missing: true}
-		for _, file := range readmes {
-			data, err := t.Fetch(ctx, raw+name+"/HEAD/"+file)
-			if errors.Is(err, ErrNotFound) {
-				continue
-			}
-			if err != nil {
-				got = readme{problem: "没有读到 README：" + err.Error()}
-				break
-			}
-			if len(data) > maxReadme {
-				data = data[:maxReadme]
-			}
-			if !utf8.Valid(data) {
-				data = []byte(strings.ToValidUTF8(string(data), ""))
-			}
-			markdown := strings.HasSuffix(strings.ToLower(file), ".md") || strings.HasSuffix(file, ".markdown")
-			got = readme{text: string(data), file: file, plain: !markdown}
-			break
-		}
+		got := t.fetchReadme(ctx, name)
 		return func() { *r = got }
 	})
+}
+
+// fetchReadme reads a repository's README from GitHub, wherever it is
+// kept. It changes nothing, and can be called off the UI's thread.
+func (t *Trending) fetchReadme(ctx context.Context, name string) readme {
+	for _, file := range readmes {
+		data, err := t.Fetch(ctx, raw+name+"/HEAD/"+file)
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return readme{problem: "没有读到 README：" + err.Error()}
+		}
+		if len(data) > maxReadme {
+			data = data[:maxReadme]
+		}
+		if !utf8.Valid(data) {
+			data = []byte(strings.ToValidUTF8(string(data), ""))
+		}
+		markdown := strings.HasSuffix(strings.ToLower(file), ".md") || strings.HasSuffix(file, ".markdown")
+		return readme{text: string(data), file: file, plain: !markdown}
+	}
+	return readme{missing: true}
+}
+
+// maxTold is the most of a README the assistant is given to read.
+const maxTold = 24 << 10
+
+// told is a README as the assistant reads it: Markdown without its HTML,
+// no longer than a model takes in at once.
+func (r readme) told() (string, error) {
+	switch {
+	case r.problem != "":
+		return "", errors.New(r.problem)
+	case r.missing:
+		return "", errors.New("这个仓库没有 README，或者没有这个仓库")
+	}
+	text := r.text
+	if !r.plain {
+		text = strings.NewReplacer(centerStart, "", centerEnd, "").Replace(Tidy(text, false))
+	}
+	if len(text) > maxTold {
+		text = strings.ToValidUTF8(text[:maxTold], "") + "\n\n（README 太长，后面的省略了）"
+	}
+	return text, nil
+}
+
+// named tells the names repositories have, as "owner/name".
+var named = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$`)
+
+// IsRepo reports whether name is written as a repository's is.
+func IsRepo(name string) bool { return named.MatchString(name) && len(name) <= 140 }
+
+// Readme returns a repository's README for the assistant to read, when it
+// was read already, as by its page: on the UI's thread.
+func (t *Trending) Readme(name string) (string, bool) {
+	r := t.ui.readmes[name]
+	if r == nil || r.loading || r.problem != "" {
+		return "", false
+	}
+	text, err := r.told()
+	return text, err == nil
+}
+
+// ReadReadme reads a repository's README from GitHub for the assistant.
+// It changes nothing, and can be called off the UI's thread.
+func (t *Trending) ReadReadme(ctx context.Context, name string) (string, error) {
+	if t.Fetch == nil {
+		return "", errors.New("这里读不了 GitHub")
+	}
+	return t.fetchReadme(ctx, name).told()
 }
 
 // part is a stretch of a README: Markdown, which its README has in the

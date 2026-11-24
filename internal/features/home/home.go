@@ -15,6 +15,7 @@ import (
 
 	"github.com/pandyzhou/atelier/internal/features/timetable"
 	"github.com/pandyzhou/atelier/internal/features/todo"
+	"github.com/pandyzhou/atelier/internal/features/trending"
 	"github.com/pandyzhou/atelier/internal/llm"
 	"github.com/pandyzhou/atelier/internal/store"
 )
@@ -53,6 +54,9 @@ type Options struct {
 	// that model, from now on.
 	Effort    func() string
 	SetEffort func(string)
+	// Trending is the week's trending repositories of GitHub, for the
+	// assistant to tell of and to read the READMEs of: nil for none.
+	Trending *trending.Trending
 	// PickFiles has the user choose files to attach, off the UI's thread,
 	// and returns their paths: none when they chose none.
 	PickFiles func() []string
@@ -187,6 +191,10 @@ func (h *Home) Stop() {
 	}
 	// A deletion that waits is not done, nor what was called for after
 	// it: each call has its answer, as the model's service wants it.
+	for _, call := range h.ui.reading {
+		h.ui.history = append(h.ui.history, llm.Message{Role: llm.Result, CallID: call.ID, Text: "用户停止了，没有执行。"})
+	}
+	h.ui.reading = nil
 	if a := h.ui.asking; a != nil {
 		for _, call := range a.calls {
 			h.ui.history = append(h.ui.history, llm.Message{Role: llm.Result, CallID: call.ID, Text: "用户停止了，没有执行。"})
@@ -445,6 +453,29 @@ func (h *Home) answer(calls []llm.Call, n int) {
 			h.ui.asking, h.ui.follow = &asking{what: what, calls: calls[i:], n: n}, true
 			return
 		}
+		// What is read from the network is read off the UI's thread: the
+		// turn goes on from here when it has come.
+		if read := h.reads(call); read != nil {
+			run := h.ui.run
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			h.ui.reading, h.ui.cancel = calls[i:], cancel
+			h.Background(func() func() {
+				result, then := read(ctx)
+				cancel()
+				return func() {
+					if run != h.ui.run {
+						return // stopped, or another conversation shows
+					}
+					h.ui.reading = nil
+					if then != nil {
+						then()
+					}
+					h.ui.history = append(h.ui.history, llm.Message{Role: llm.Result, CallID: call.ID, Text: result})
+					h.answer(calls[i+1:], n)
+				}
+			})
+			return
+		}
 		h.ui.history = append(h.ui.history, llm.Message{Role: llm.Result, CallID: call.ID, Text: h.call(call)})
 	}
 	if n+1 >= maxSteps {
@@ -472,6 +503,88 @@ func (h *Home) Confirm(yes bool) {
 	h.ui.history = append(h.ui.history, llm.Message{Role: llm.Result, CallID: call.ID, Text: result})
 	h.ui.follow = true
 	h.answer(a.calls[1:], a.n)
+}
+
+// repoName is a repository's name as "owner/name", of what the model may
+// have written for it: its address, or its name with room around it.
+func repoName(s string) string {
+	s = strings.TrimSpace(s)
+	for _, prefix := range []string{"https://github.com/", "http://github.com/", "github.com/"} {
+		s = strings.TrimPrefix(s, prefix)
+	}
+	return strings.TrimSuffix(strings.TrimSuffix(s, "/"), ".git")
+}
+
+// trendingLines writes the week's trending repositories for the model.
+func trendingLines(repos []trending.Repo) string {
+	var b strings.Builder
+	for i, r := range repos {
+		fmt.Fprintf(&b, "%d. %s", i+1, r.Name)
+		if r.Language != "" {
+			b.WriteString("（" + r.Language + "）")
+		}
+		fmt.Fprintf(&b, " star %d，本周 +%d", r.Stars, r.Gained)
+		if r.Description != "" {
+			b.WriteString("：" + r.Description)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// reads returns what a call reads from the network, to run off the UI's
+// thread: what to tell the model, and what to do on the UI's thread once
+// it has come. It is nil for a call that reads nothing from there, which
+// call answers.
+func (h *Home) reads(c llm.Call) func(ctx context.Context) (string, func()) {
+	t := h.Trending
+	if t == nil || !t.CanRead() {
+		return nil
+	}
+	note := func(text string) func() {
+		return func() { h.ui.entries = append(h.ui.entries, entry{Kind: note, Text: text}) }
+	}
+	switch c.Name {
+	case "list_trending":
+		// The list at hand, unless it is old or there is none.
+		had := t.Repos()
+		if len(had) > 0 && t.Fresh() {
+			return nil
+		}
+		return func(ctx context.Context) (string, func()) {
+			repos, err := t.Read(ctx)
+			switch {
+			case err == nil:
+				return trendingLines(repos), func() {
+					t.Keep(repos)
+					note("看了 GitHub 本周热门")()
+				}
+			case len(had) > 0:
+				return trendingLines(had) + "\n（这是之前读到的，刚才没有刷新成功：" + err.Error() + "）", note("看了 GitHub 本周热门")
+			}
+			return "没有读到热门仓库：" + err.Error(), nil
+		}
+	case "read_readme":
+		var in struct{ Repo string }
+		if json.Unmarshal(c.Input, &in) != nil {
+			return nil
+		}
+		repo := repoName(in.Repo)
+		if !trending.IsRepo(repo) {
+			return nil
+		}
+		if _, ok := t.Readme(repo); ok {
+			return nil
+		}
+		return func(ctx context.Context) (string, func()) {
+			text, err := t.ReadReadme(ctx, repo)
+			if err != nil {
+				return "没有读到 " + repo + " 的 README：" + err.Error(), nil
+			}
+			return text, note("读了 " + repo + " 的 README")
+		}
+	}
+	return nil
 }
 
 // deletes says what a call would delete, as "任务“交电费”": "" when it is
@@ -615,6 +728,18 @@ var tools = []llm.Tool{
 					"end":    prop("string", "结束时间，24 小时制 HH:MM；填空字符串表示清空"),
 				}),
 			},
+		}),
+	},
+	{
+		Name:        "list_trending",
+		Description: "列出 GitHub 本周的热门仓库：名字、简介、语言、star 数和本周新增的 star。用户问最近有什么热门项目、想找某类开源项目时用。",
+		Parameters:  schema([]string{}, map[string]any{}),
+	},
+	{
+		Name:        "read_readme",
+		Description: "读 GitHub 上一个公开仓库的 README，不限于热门榜上的。用户问某个仓库是做什么的、怎么安装、怎么用时用。",
+		Parameters: schema([]string{"repo"}, map[string]any{
+			"repo": prop("string", "仓库，写成 owner/name，比如 golang/go"),
 		}),
 	},
 	{
@@ -915,6 +1040,33 @@ func (h *Home) call(c llm.Call) string {
 		}
 		did("已设置节次：" + strings.Join(changes, "，"))
 		return "已设置，现在是：\n" + h.periodLines()
+	case "list_trending":
+		// What there is at hand; reads has it read anew when that is old.
+		t := h.Trending
+		if t == nil || len(t.Repos()) == 0 {
+			return "这里看不了热门仓库。"
+		}
+		h.ui.entries = append(h.ui.entries, entry{Kind: note, Text: "看了 GitHub 本周热门"})
+		return trendingLines(t.Repos())
+	case "read_readme":
+		var in struct{ Repo string }
+		if err := json.Unmarshal(c.Input, &in); err != nil {
+			return "参数不对：" + err.Error()
+		}
+		repo := repoName(in.Repo)
+		switch t := h.Trending; {
+		case !trending.IsRepo(repo):
+			return "repo 要写成 owner/name"
+		case t == nil:
+			return "这里读不了 GitHub。"
+		default:
+			text, ok := t.Readme(repo)
+			if !ok {
+				return "这里读不了 GitHub。"
+			}
+			h.ui.entries = append(h.ui.entries, entry{Kind: note, Text: "读了 " + repo + " 的 README"})
+			return text
+		}
 	case "list_tasks":
 		var in struct{ From, To string }
 		if err := json.Unmarshal(c.Input, &in); err != nil {
@@ -1060,6 +1212,7 @@ func (h *Home) system() string {
 - 删除不能恢复：只在用户明确说要删时才删，指不清是哪一条时先问清楚。每次删除前应用都会让用户点确认，所以指明了是哪一条就直接调用，不用自己再问一遍“确定吗”；工具说用户没有同意时，就不要再删。
 - 用户附上图片或文件时，按里面的内容回答。要据此添加好几条任务或课程时，先把读到的列出来让用户确认，再添加。
 - 用户的每条消息前面有一段 <context>：当时的时间，以及课表和任务的清单，清单和上一次相同时省略。以最新的一份为准；你用工具做过的改动，以工具回的结果为准。
+- 用户问起开源项目时，可以用 list_trending 看 GitHub 本周的热门仓库，用 read_readme 读任何公开仓库的 README；读到的内容用中文概括给用户，不要整段照搬。
 - 每天有几节课、每节的起止时间可以用 set_periods 设置。照着用户给的课表添加课程时，节数不够就先加够，上面写了时间的也一并设好。
 `)
 	return b.String()

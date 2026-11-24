@@ -36,12 +36,13 @@ type viewState struct {
 	thinking  time.Time
 	opened    map[int]bool
 	efforting bool
-	asking    *asking   // the deletion that waits for the user's word
-	listed    string    // the timetable and the tasks as the model was last told them
-	pending   []pending // the files to send with the next message
-	loading   int       // how many more of them are being read
-	note      string    // what could not be attached, and why
-	over      bool      // files are dragged over the page
+	asking    *asking    // the deletion that waits for the user's word
+	reading   []llm.Call // the calls still to answer while one reads from the network
+	listed    string     // the timetable and the tasks as the model was last told them
+	pending   []pending  // the files to send with the next message
+	loading   int        // how many more of them are being read
+	note      string     // what could not be attached, and why
+	over      bool       // files are dragged over the page
 	// thumbs are the conversation's pictures as they show, by what they
 	// are kept under: nil for one that is no longer there.
 	thumbs map[string]*ui.Bitmap

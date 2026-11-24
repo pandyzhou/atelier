@@ -26,10 +26,21 @@ import (
 // features lists the app's features in sidebar order. Add new ones here.
 func (a *app) makeFeatures(s *store.Store) []feature.Feature {
 	tasks, table := todo.New(s), timetable.New(s)
+	// It reads its list only once main says from where: tests read
+	// nothing from the network.
+	hot := trending.New(s, trending.Options{
+		Background: a.background,
+		Model:      a.DefaultModel,
+		Complete: func(ctx context.Context, c llm.Config, r llm.Request, onText func(string)) (llm.Message, error) {
+			return a.complete(ctx, c, r, onText)
+		},
+		OnUI: a.onUI,
+	})
 	return []feature.Feature{
 		home.New(s, tasks, table, home.Options{
-			Model:  a.DefaultModel,
-			Models: a.modelChoices,
+			Trending: hot,
+			Model:    a.DefaultModel,
+			Models:   a.modelChoices,
 			Choose: func(m home.Model) {
 				a.settings.Model, a.settings.ModelName = m.ProviderID, m.Name
 				a.saveSettings()
@@ -62,16 +73,7 @@ func (a *app) makeFeatures(s *store.Store) []feature.Feature {
 		tasks,
 		table,
 		tasks.Calendar(),
-		// It reads its list only once main says from where: tests read
-		// nothing from the network.
-		trending.New(s, trending.Options{
-			Background: a.background,
-			Model:      a.DefaultModel,
-			Complete: func(ctx context.Context, c llm.Config, r llm.Request, onText func(string)) (llm.Message, error) {
-				return a.complete(ctx, c, r, onText)
-			},
-			OnUI: a.onUI,
-		}),
+		hot,
 	}
 }
 

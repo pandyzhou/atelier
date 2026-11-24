@@ -123,25 +123,48 @@ func (t *Trending) Refresh() {
 	t.Background(func() func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		page, err := t.Fetch(ctx, Page)
-		var repos []Repo
-		if err == nil {
-			if repos = Parse(page); len(repos) == 0 {
-				err = errors.New("GitHub 的热门页面读不出仓库，页面可能改版了")
-			}
-		}
+		repos, err := t.Read(ctx)
 		return func() {
 			t.ui.loading = false
 			if err != nil {
 				t.ui.problem = "没有刷新成功：" + err.Error()
 				return
 			}
-			t.data.Repos, t.data.Fetched = repos, t.now().Format(time.RFC3339)
-			if err := t.store.Save(t.ID(), &t.data); err != nil {
-				log.Printf("trending: save: %v", err)
-			}
+			t.Keep(repos)
 		}
 	})
+}
+
+// CanRead reports whether anything can be read from GitHub: the app said
+// from where.
+func (t *Trending) CanRead() bool { return t.Fetch != nil }
+
+// Fresh reports whether the list was read not long ago.
+func (t *Trending) Fresh() bool { return t.now().Sub(t.fetched()) <= stale }
+
+// Read reads the week's list from GitHub. It changes nothing, and can be
+// called off the UI's thread: Keep takes what it read.
+func (t *Trending) Read(ctx context.Context) ([]Repo, error) {
+	if t.Fetch == nil {
+		return nil, errors.New("这里读不了 GitHub")
+	}
+	page, err := t.Fetch(ctx, Page)
+	if err != nil {
+		return nil, err
+	}
+	repos := Parse(page)
+	if len(repos) == 0 {
+		return nil, errors.New("GitHub 的热门页面读不出仓库，页面可能改版了")
+	}
+	return repos, nil
+}
+
+// Keep takes a list that was read as the list, and saves it.
+func (t *Trending) Keep(repos []Repo) {
+	t.data.Repos, t.data.Fetched = repos, t.now().Format(time.RFC3339)
+	if err := t.store.Save(t.ID(), &t.data); err != nil {
+		log.Printf("trending: save: %v", err)
+	}
 }
 
 // Get reads what is at an address, as any browser without an account
