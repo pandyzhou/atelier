@@ -1144,10 +1144,17 @@ func TestScreenshot(t *testing.T) {
 			{Name: "体育", Day: 2, From: 7, To: 7},
 			{Name: "线性代数", Room: "A105", Day: 3, From: 1, To: 3},
 			{Name: "实验", Room: "实验楼", Day: 4, From: 5, To: 8},
+			{Name: "大学英语", Room: "B102", Day: 2, From: 3, To: 4},
+			{Name: "程序设计", Room: "机房 2", Day: 1, From: 6, To: 8},
+			{Name: "马克思主义基本原理概论", Day: 4, From: 1, To: 2},
+			{Name: "高等数学", Room: "A301", Teacher: "王老师", Day: 3, From: 5, To: 6},
 		} {
 			if _, err := tb.Put(k); err != nil {
 				t.Fatal(err)
 			}
+		}
+		for i, at := range []string{"08:20", "09:05", "10:00", "10:45", "11:30", "13:40", "14:25", "15:20", "16:05"} {
+			tb.SetTime(i+1, timetable.Period{Start: at})
 		}
 	}
 	tt := ui.NewTester(a.view, 1280, 800)

@@ -2,6 +2,7 @@ package timetable
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -81,21 +82,56 @@ func (t *Timetable) heading(c *ui.Context) {
 	})
 }
 
+// hairline is the color of the lines between the periods: faint, under
+// the courses, which are what the page is of.
+func hairline() ui.Color { return mallow.Text.Alpha(0.08) }
+
+// hues gives each course its color: those of a name share one, and the
+// names take the colors in the order their courses were added in.
+func (t *Timetable) hues() map[string]ui.Color {
+	first := map[string]int{} // the least ID of the courses of a name
+	var names []string
+	for _, k := range t.data.Courses {
+		if id, ok := first[k.Name]; !ok {
+			first[k.Name] = k.ID
+			names = append(names, k.Name)
+		} else if k.ID < id {
+			first[k.Name] = k.ID
+		}
+	}
+	slices.SortFunc(names, func(a, b string) int { return first[a] - first[b] })
+	out := map[string]ui.Color{}
+	for i, name := range names {
+		out[name] = mallow.Hues[i%len(mallow.Hues)]
+	}
+	return out
+}
+
 // grid is the week: a column for each day, a row for each period, and the
-// courses over the periods they take. The rows share the height there is,
-// and scroll where that would make them too low.
+// courses over the periods they take, each in its color. The rows share
+// the height there is, and scroll where that would make them too low.
 func (t *Timetable) grid(c *ui.Context) {
 	n := len(t.data.Periods)
 	_, h := c.Size()
 	row := max(minRow, float32(int((h-250)/float32(n))))
 	today := t.today()
+	hues := t.hues()
 	ui.Column(c).Grow(1).MinHeight(0).Padding(0, 20, 16, 20).Children(func() {
-		ui.Row(c).Shrink(0).Padding(0, 0, 6, axisWidth).Children(func() {
+		ui.Row(c).Shrink(0).Padding(0, 0, 8, axisWidth).Children(func() {
 			for i, name := range dayNames {
-				text := ui.Text(c, name).Grow(1).Basis(0).FontSize(12).TextColor(mallow.Muted).TextAlign(ui.Center)
-				if i == today {
-					text.TextColor(mallow.Accent).FontWeight(500)
-				}
+				ui.Row(c.Key(i)).Grow(1).Basis(0).Justify(ui.Center).Children(func() {
+					// Today's name is on a mark of the accent.
+					mark := ui.Row(c).Padding(3, 12).Radius(mallow.RadiusPill)
+					if i == today {
+						mark.Background(mallow.Accent)
+					}
+					mark.Children(func() {
+						text := ui.Text(c, name).FontSize(12).TextColor(mallow.Muted).SingleLine()
+						if i == today {
+							text.TextColor(mallow.OnAccent).FontWeight(600)
+						}
+					})
+				})
 			}
 		})
 		ui.Scroll(c).Label("课程表").Grow(1).MinHeight(0).Children(func() {
@@ -103,19 +139,21 @@ func (t *Timetable) grid(c *ui.Context) {
 				ui.Column(c).Width(axisWidth).Shrink(0).Children(func() {
 					for i, p := range t.data.Periods {
 						ui.Column(c.Key(i)).Height(row).Children(func() {
-							mallow.Groove(c)
-							ui.Column(c).Grow(1).Justify(ui.Center).AlignItems(ui.Center).Children(func() {
-								ui.Text(c, strconv.Itoa(i+1)).FontSize(13).FontWeight(500).TextColor(mallow.Text)
+							ui.Box(c).Height(1).Background(hairline())
+							ui.Column(c).Grow(1).Justify(ui.Center).AlignItems(ui.Center).Gap(1).Children(func() {
+								ui.Text(c, strconv.Itoa(i+1)).FontSize(14).FontWeight(600).TextColor(mallow.Text)
 								if p.Start != "" {
-									ui.Text(c, p.Start).FontSize(11).TextColor(mallow.Muted).SingleLine()
+									ui.Text(c, p.Start).FontSize(10).TextColor(mallow.Muted).SingleLine()
+								}
+								if p.End != "" {
+									ui.Text(c, p.End).FontSize(10).TextColor(mallow.Muted).SingleLine()
 								}
 							})
 						})
 					}
 				})
 				for day := range dayNames {
-					mallow.GrooveV(c).Height(float32(n) * row)
-					t.day(c.Key(fmt.Sprint("day:", day)), day, row)
+					t.day(c.Key(fmt.Sprint("day:", day)), day, row, day == today, hues)
 				}
 			})
 		})
@@ -126,15 +164,21 @@ func (t *Timetable) grid(c *ui.Context) {
 // over them. A click on a free cell adds a course there, and a press drawn
 // down or up over several adds one that takes them all; a right click
 // offers the same for the one cell.
-func (t *Timetable) day(c *ui.Context, day int, row float32) {
+func (t *Timetable) day(c *ui.Context, day int, row float32, today bool, hues map[string]ui.Color) {
 	n := len(t.data.Periods)
 	column := ui.Column(c).Grow(1).Basis(0).MinWidth(0)
+	if today {
+		column.Background(mallow.Accent.Alpha(0.05))
+	}
 	_, y, _ := column.PointerPosition()
 	column.Children(func() {
 		pressed := 0 // the period whose cell is pressed, 0 for none
 		for i := range t.data.Periods {
 			cell := ui.Column(c.Key(i)).Label(fmt.Sprintf("%s第%d节", dayNames[day], i+1)).Height(row).Cursor(ui.CursorPointer)
-			cell.Children(func() { mallow.Groove(c) })
+			cell.Children(func() { ui.Box(c).Height(1).Background(hairline()) })
+			if cell.Hovered() && !t.ui.span.on {
+				cell.Background(mallow.Text.Alpha(0.04))
+			}
 			// Held with the primary button, wherever the pointer went
 			// since: Pressed is only while it is still over the cell.
 			if button, held := cell.PressedButton(); held && button == 0 {
@@ -154,8 +198,8 @@ func (t *Timetable) day(c *ui.Context, day int, row float32) {
 			// From the cell pressed to the one the pointer is over now.
 			at := min(max(int(y/row)+1, 1), n)
 			span.on, span.day, span.from, span.to = true, day, min(pressed, at), max(pressed, at)
-			ui.Box(c).Absolute().Left(4).Right(4).Top(float32(span.from-1)*row+6).Height(float32(span.to-span.from+1)*row-9).
-				Radius(mallow.RadiusSmall).Background(mallow.Accent.Alpha(0.16)).Border(1, mallow.Accent.Alpha(0.5))
+			ui.Box(c).Absolute().Left(3).Right(3).Top(float32(span.from-1)*row+4).Height(float32(span.to-span.from+1)*row-7).
+				Radius(blockRadius).Background(mallow.Accent.Alpha(0.16)).Border(1, mallow.Accent.Alpha(0.5))
 		case span.on && span.day == day:
 			// Let go: the course to add takes what was drawn over.
 			span.on = false
@@ -163,27 +207,36 @@ func (t *Timetable) day(c *ui.Context, day int, row float32) {
 		}
 		for _, k := range t.data.Courses {
 			if k.Day == day {
-				t.block(c.Key(fmt.Sprint("block:", k.ID)), k, row)
+				t.block(c.Key(fmt.Sprint("block:", k.ID)), k, row, hues[k.Name])
 			}
 		}
 	})
 }
 
-// block is a course on the grid, over its periods: a click opens it, a
-// right click offers that and to delete it.
-func (t *Timetable) block(c *ui.Context, k *Course, row float32) {
-	b := mallow.Plain(c, "打开"+k.Name).Absolute().Left(4).Right(4).
-		Top(float32(k.From-1)*row+6).Height(float32(k.To-k.From+1)*row-9).
-		Padding(6, 8).AlignItems(ui.Start).Clip()
-	mallow.Raised(b, mallow.Tiny)
+// blockRadius rounds the corners of a course on the grid.
+const blockRadius = 10
+
+// block is a course on the grid, over its periods, in its color: a click
+// opens it, a right click offers that and to delete it.
+func (t *Timetable) block(c *ui.Context, k *Course, row float32, hue ui.Color) {
+	height := float32(k.To-k.From+1)*row - 7
+	b := mallow.Plain(c, "打开"+k.Name).Absolute().Left(3).Right(3).
+		Top(float32(k.From-1)*row+4).Height(height).
+		Padding(7, 9).AlignItems(ui.Start).Radius(blockRadius).Clip()
+	ink := mallow.Tinted(b, hue)
+	if b.Hovered() {
+		b.Border(1.5, ink)
+	}
+	// As many lines of the name as there is room for over the rest.
+	lines := max(1, min(4, int((height-14-32)/18)))
 	b.Children(func() {
-		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-			ui.Text(c, k.Name).FontSize(13).FontWeight(500).TextColor(mallow.Accent).MaxLines(2)
+		ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
+			ui.Text(c, k.Name).FontSize(13).FontWeight(600).TextColor(ink).MaxLines(lines)
 			if k.Room != "" {
-				ui.Text(c, k.Room).FontSize(11).TextColor(mallow.Text).SingleLine()
+				ui.Text(c, "@"+k.Room).FontSize(11).TextColor(ink.Alpha(0.85)).SingleLine()
 			}
 			if k.Teacher != "" {
-				ui.Text(c, k.Teacher).FontSize(11).TextColor(mallow.Muted).SingleLine()
+				ui.Text(c, k.Teacher).FontSize(11).TextColor(ink.Alpha(0.7)).SingleLine()
 			}
 		})
 	})
