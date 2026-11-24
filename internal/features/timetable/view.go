@@ -120,15 +120,16 @@ func (t *Timetable) grid(c *ui.Context) {
 		ui.Row(c).Shrink(0).Padding(0, 0, 8, axisWidth).Children(func() {
 			for i, name := range dayNames {
 				ui.Row(c.Key(i)).Grow(1).Basis(0).Justify(ui.Center).Children(func() {
-					// Today's name is on a mark of the accent.
-					mark := ui.Row(c).Padding(3, 12).Radius(mallow.RadiusPill)
+					// Today's name is pressed into the surface, in the
+					// accent, as what is chosen in the sidebar is.
+					mark := ui.Row(c).Padding(4, 14).Radius(mallow.RadiusPill)
 					if i == today {
-						mark.Background(mallow.Accent)
+						mallow.Recessed(mark, mallow.Tiny)
 					}
 					mark.Children(func() {
 						text := ui.Text(c, name).FontSize(12).TextColor(mallow.Muted).SingleLine()
 						if i == today {
-							text.TextColor(mallow.OnAccent).FontWeight(600)
+							text.TextColor(mallow.Accent).FontWeight(600)
 						}
 					})
 				})
@@ -153,7 +154,7 @@ func (t *Timetable) grid(c *ui.Context) {
 					}
 				})
 				for day := range dayNames {
-					t.day(c.Key(fmt.Sprint("day:", day)), day, row, day == today, hues)
+					t.day(c.Key(fmt.Sprint("day:", day)), day, row, hues)
 				}
 			})
 		})
@@ -164,12 +165,9 @@ func (t *Timetable) grid(c *ui.Context) {
 // over them. A click on a free cell adds a course there, and a press drawn
 // down or up over several adds one that takes them all; a right click
 // offers the same for the one cell.
-func (t *Timetable) day(c *ui.Context, day int, row float32, today bool, hues map[string]ui.Color) {
+func (t *Timetable) day(c *ui.Context, day int, row float32, hues map[string]ui.Color) {
 	n := len(t.data.Periods)
 	column := ui.Column(c).Grow(1).Basis(0).MinWidth(0)
-	if today {
-		column.Background(mallow.Accent.Alpha(0.05))
-	}
 	_, y, _ := column.PointerPosition()
 	column.Children(func() {
 		pressed := 0 // the period whose cell is pressed, 0 for none
@@ -216,27 +214,39 @@ func (t *Timetable) day(c *ui.Context, day int, row float32, today bool, hues ma
 // blockRadius rounds the corners of a course on the grid.
 const blockRadius = 10
 
-// block is a course on the grid, over its periods, in its color: a click
-// opens it, a right click offers that and to delete it.
+// block is a course on the grid, over its periods: raised from the
+// surface as the app's buttons are, faintly of its color, with a bar of it
+// at its left and its name written in it. A click opens it, a right click
+// offers that and to delete it.
 func (t *Timetable) block(c *ui.Context, k *Course, row float32, hue ui.Color) {
-	height := float32(k.To-k.From+1)*row - 7
-	b := mallow.Plain(c, "打开"+k.Name).Absolute().Left(3).Right(3).
-		Top(float32(k.From-1)*row+4).Height(height).
-		Padding(7, 9).AlignItems(ui.Start).Radius(blockRadius).Clip()
-	ink := mallow.Tinted(b, hue)
-	if b.Hovered() {
-		b.Border(1.5, ink)
+	height := float32(k.To-k.From+1)*row - 9
+	b := mallow.Plain(c, "打开"+k.Name).Absolute().Left(5).Right(5).
+		Top(float32(k.From-1)*row+5).Height(height).
+		Padding(7, 9, 7, 14).AlignItems(ui.Start).Radius(blockRadius)
+	tint := float32(0.08)
+	switch {
+	case b.Pressed():
+		mallow.Recessed(b, mallow.Tiny)
+	case b.Hovered():
+		mallow.Raised(b, mallow.Tiny)
+		tint = 0.14
+	default:
+		mallow.Raised(b, 3)
 	}
+	b.Background(mallow.Base.Mix(hue, tint))
+	// The hue, toward the color text is written in: to read on the surface.
+	ink := hue.Mix(mallow.Text, 0.25)
 	// As many lines of the name as there is room for over the rest.
 	lines := max(1, min(4, int((height-14-32)/18)))
 	b.Children(func() {
+		ui.Box(c).Absolute().Left(5).Top(8).Bottom(8).Width(3).Radius(2).Background(hue)
 		ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
 			ui.Text(c, k.Name).FontSize(13).FontWeight(600).TextColor(ink).MaxLines(lines)
 			if k.Room != "" {
-				ui.Text(c, "@"+k.Room).FontSize(11).TextColor(ink.Alpha(0.85)).SingleLine()
+				ui.Text(c, "@"+k.Room).FontSize(11).TextColor(mallow.Text).SingleLine()
 			}
 			if k.Teacher != "" {
-				ui.Text(c, k.Teacher).FontSize(11).TextColor(ink.Alpha(0.7)).SingleLine()
+				ui.Text(c, k.Teacher).FontSize(11).TextColor(mallow.Muted).SingleLine()
 			}
 		})
 	})
