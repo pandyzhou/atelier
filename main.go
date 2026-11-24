@@ -45,6 +45,9 @@ type settings struct {
 	Models    []modelConfig `json:"models,omitempty"`
 	Model     int           `json:"model,omitempty"`
 	NextModel int           `json:"nextModel,omitempty"`
+	// CloseQuits makes closing the window quit the app. Without it, the
+	// window hides and the app stays in the notification area.
+	CloseQuits bool `json:"closeQuits,omitempty"`
 }
 
 // app is the shell: a title bar, a sidebar of features and the chosen one's
@@ -60,6 +63,7 @@ type app struct {
 	webFonts fontsState   // the fonts downloaded, and the one on its way
 	box      *secret.Box  // seals the models' keys
 	models   modelsState  // what the models' part of the settings shows
+	tray     trayState    // the icon in the notification area
 	updater  updater      // where new versions come from
 	update   updateState  // what is known of a newer version
 	// ping tests a model's connection: llm.Ping, but in tests.
@@ -297,6 +301,7 @@ type settingsSection struct {
 func (a *app) settingsSections() []settingsSection {
 	return []settingsSection{
 		{"look", "界面", a.lookSettings},
+		{"general", "通用", a.traySettings},
 		{"models", "模型", a.modelSettings},
 		{"about", "关于", a.aboutSettings},
 	}
@@ -450,7 +455,7 @@ func main() {
 	}
 	a := newApp(store.Open(dir))
 	mygo.App.WhenReady(func() {
-		a.win = mygo.NewWindow(mygo.WindowOptions{
+		win := mygo.NewWindow(mygo.WindowOptions{
 			Title:     "Atelier",
 			Width:     1280,
 			Height:    800,
@@ -463,6 +468,8 @@ func main() {
 			HideWindowButtons: true,
 			Content:           ui.View(a.view),
 		})
+		a.win = win
+		a.watchWindow(win)
 		// Released builds look for a newer version as they start, and say
 		// so only if there is one.
 		a.restoreFont()

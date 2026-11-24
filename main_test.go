@@ -818,6 +818,28 @@ func TestWebFont(t *testing.T) {
 	}
 }
 
+// Closing the window keeps the app in the notification area unless the
+// settings say it quits, which is saved; quitting closes it either way.
+func TestCloseToTray(t *testing.T) {
+	dir := t.TempDir()
+	a := newApp(store.Open(dir))
+	tt := ui.NewTester(a.view, 1280, 800)
+	if !staysInTray(a.settings, false) || staysInTray(a.settings, true) {
+		t.Fatalf("at first: closing stays %v, quitting stays %v", staysInTray(a.settings, false), staysInTray(a.settings, true))
+	}
+	click(t, tt, "设置", "通用", "留在托盘")
+	if !a.settings.CloseQuits || staysInTray(a.settings, false) {
+		t.Fatalf("after turning it off: %+v", a.settings.CloseQuits)
+	}
+	if b := newApp(store.Open(dir)); !b.settings.CloseQuits {
+		t.Errorf("after restarting, closing the window does not quit")
+	}
+	click(t, tt, "留在托盘")
+	if a.settings.CloseQuits {
+		t.Errorf("after turning it on again, closing the window quits")
+	}
+}
+
 // A known font is found under the name its foundry gives the version
 // installed, and the plain family before its weights.
 func TestInstalledFont(t *testing.T) {
