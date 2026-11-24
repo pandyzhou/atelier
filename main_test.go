@@ -123,28 +123,121 @@ func TestTodoNoListsOrPriority(t *testing.T) {
 	}
 }
 
-// The + opens a new task's details at once: what repeats is set there
-// before the title is done. One left without a title is not kept.
-func TestTodoStart(t *testing.T) {
+// The + brings a dialog that adds a task: what repeats and when it is due
+// are set there, before it is added. Left by Escape, 取消 or a click outside,
+// it adds nothing, and starts blank the next time.
+func TestTodoAddDialog(t *testing.T) {
 	d, tt := newTodoTester(t)
-	click(t, tt, "添加任务", "每周", "任务标题")
+	click(t, tt, "添加任务")
+	if !tt.HasText("新任务") {
+		t.Fatalf("no dialog after 添加任务: %q", tt.Texts())
+	}
+	// The keyboard is in the title as the dialog shows.
 	tt.Type("Check upstream")
+	click(t, tt, "每周", "明天", "添加")
+	ks := d.Tasks()
+	if len(ks) != 1 || ks[0].Title != "Check upstream" || ks[0].Repeat != todo.RepeatWeekly || ks[0].Due <= d.Today() {
+		t.Fatalf("after adding a weekly task for tomorrow: %+v", ks)
+	}
+	if tt.HasText("新任务") {
+		t.Fatalf("the dialog still shows after adding")
+	}
+
+	// Without a title nothing is added, by the button or by Enter, and the
+	// dialog stays.
+	click(t, tt, "添加任务", "添加")
 	tt.Key(0, ui.KeyEnter)
-	if ks := d.Tasks(); len(ks) != 1 || ks[0].Title != "Check upstream" || ks[0].Repeat != todo.RepeatWeekly {
-		t.Fatalf("after starting a weekly task: %+v", ks)
+	tt.Frame()
+	if len(d.Tasks()) != 1 || !tt.HasText("新任务") {
+		t.Fatalf("after 添加 without a title: %d tasks, %q", len(d.Tasks()), tt.Texts())
+	}
+	click(t, tt, "取消")
+
+	for name, leave := range map[string]func(){
+		"取消":              func() { click(t, tt, "取消") },
+		"Escape":          func() { tt.Key(0, ui.KeyEscape) },
+		"a click outside": func() { tt.ClickAt(8, 400) },
+	} {
+		click(t, tt, "添加任务")
+		tt.Type("Nope")
+		leave()
+		tt.Frame()
+		if len(d.Tasks()) != 1 || tt.HasText("新任务") {
+			t.Fatalf("after leaving the dialog by %s: %d tasks, %q", name, len(d.Tasks()), tt.Texts())
+		}
+		// What was written is not there the next time.
+		click(t, tt, "添加任务")
+		if tt.HasText("Nope") {
+			t.Fatalf("the dialog left by %s shows what was written again", name)
+		}
+		click(t, tt, "取消")
+	}
+
+	// A day picked in the dialog's calendar is the task's.
+	day, _ := time.Parse("2006-01-02", d.Today())
+	far := day.AddDate(0, 0, 3)
+	if far.Month() != day.Month() {
+		far = day.AddDate(0, 0, -3)
 	}
 	click(t, tt, "添加任务")
-	tt.Key(0, ui.KeyEscape)
-	tt.Frame()
-	if n := len(d.Tasks()); n != 1 {
-		t.Fatalf("%d tasks after starting one and leaving it blank", n)
-	}
-	// Starting another closes the one that was open.
-	click(t, tt, "添加任务", "添加任务")
 	tt.Type("Buy milk")
+	click(t, tt, "其他日期", fmt.Sprintf("%d月%d日", int(far.Month()), far.Day()), "添加")
+	if ks := d.Tasks(); len(ks) != 2 || ks[1].Title != "Buy milk" || ks[1].Due != far.Format("2006-01-02") {
+		t.Fatalf("after adding a task for a day of the calendar: %+v", ks)
+	}
+}
+
+// The dialog fits a window as low as the lowest, at the largest size: with
+// the calendar open, its buttons are still in reach.
+func TestTodoAddDialogInLowWindow(t *testing.T) {
+	a := newApp(store.Open(""))
+	a.settings.Size = "xlarge"
+	tt := ui.NewTester(a.view, 860, 520)
+	d := a.current().(*todo.Todo)
+	click(t, tt, "添加任务")
+	tt.Type("Buy milk")
+	click(t, tt, "其他日期")
+	tt.Frame()
+	if !tt.HasText("上个月") {
+		t.Fatalf("no calendar in the dialog: %q", tt.Texts())
+	}
+	// The heading and the buttons are in the window: what scrolls is
+	// between them.
+	for _, text := range []string{"新任务", "取消", "添加"} {
+		if r, ok := tt.Find(text); !ok || r.Y < 0 || r.Y+r.H > 520 {
+			t.Errorf("%q is at %+v, outside the window", text, r)
+		}
+	}
+	click(t, tt, "添加")
+	if len(d.Tasks()) != 1 {
+		t.Fatalf("%d tasks after 添加 in a low window", len(d.Tasks()))
+	}
+}
+
+// A task is never left without a title: one erased in its details keeps
+// the title it had.
+func TestTodoTitleKept(t *testing.T) {
+	d, tt := newTodoTester(t)
+	add(t, tt, "Buy milk")
+	k := d.Tasks()[0]
+	click(t, tt, "打开Buy milk", "任务标题")
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Key(0, ui.KeyBackspace)
+	tt.Frame()
+	if k.Title != "Buy milk" {
+		t.Fatalf("with its title erased, the task is called %q", k.Title)
+	}
+	click(t, tt, "关闭详情")
+	if len(d.Tasks()) != 1 || k.Title != "Buy milk" || !tt.HasText("Buy milk") {
+		t.Fatalf("after closing the details of a task with its title erased: %+v", d.Tasks())
+	}
+	// Written anew, it is the new title.
+	click(t, tt, "打开Buy milk", "任务标题")
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Type("Buy oat milk")
 	tt.Key(0, ui.KeyEnter)
-	if ks := d.Tasks(); len(ks) != 2 || ks[1].Title != "Buy milk" {
-		t.Fatalf("after starting twice and writing once: %+v", ks)
+	if k.Title != "Buy oat milk" || !tt.HasText("Buy oat milk") {
+		t.Fatalf("after writing a new title: %q, %q", k.Title, tt.Texts())
 	}
 }
 
@@ -266,6 +359,11 @@ func TestScreenshot(t *testing.T) {
 	}
 	d.SetDone(d.Add(todo.Task{Title: "预约体检", Due: day(0)}), true)
 	tt := ui.NewTester(a.view, 1280, 800)
+	// ATELIER_SCREENSHOT_SIZE is the window's size, as 860x520.
+	var w, h int
+	if n, _ := fmt.Sscanf(os.Getenv("ATELIER_SCREENSHOT_SIZE"), "%dx%d", &w, &h); n == 2 {
+		tt.SetSize(w, h)
+	}
 	if os.Getenv("ATELIER_SCREENSHOT_SCALE") == "2" {
 		tt.SetScale(2)
 	}
@@ -422,6 +520,14 @@ func TestFontsKeepLayout(t *testing.T) {
 		for _, s := range sizes {
 			fonts += steady(t, a, s.id, page, func() map[string]place { return places(st) })
 		}
+	}
+	// The dialog that adds a task, its calendar open.
+	a.settings.Size, a.settings.Font = "", ""
+	st.Frame()
+	click(t, st, "待办", "添加任务", "其他日期")
+	st.Advance(time.Second)
+	for _, s := range sizes {
+		fonts += steady(t, a, s.id, "新任务", func() map[string]place { return places(st) })
 	}
 	if fonts == 0 {
 		t.Skip("the system has none of the fonts to choose from")

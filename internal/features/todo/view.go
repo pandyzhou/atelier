@@ -13,14 +13,21 @@ import (
 
 // viewState is what the page shows, which is not saved.
 type viewState struct {
-	view     string           // the view chosen
-	open     int              // the ID of the task whose details show, 0 for none
-	monday   string           // the Monday of the week the week view shows
-	calMonth time.Time        // the month the details' calendar shows
-	calOpen  bool             // the details' calendar shows
-	calFor   int              // the task that month was set for
+	view   string // the view chosen
+	monday string // the Monday of the week the week view shows
+	// open is the ID of the task whose details show, 0 for none; title is
+	// what is written as its title, and titleWas its title as they opened.
+	open            int
+	title, titleWas string
+	// adding is whether the dialog that adds a task shows, and draft the
+	// task it writes.
+	adding bool
+	draft  Task
+	// The calendar of the task that is open, or of the draft: whether it
+	// shows, and the month it shows.
+	calOpen  bool
+	calMonth time.Time
 	menus    map[string]*bool // the context menus that show, see menuOpen
-	focus    string           // what has the keyboard, of what is bound to it
 	// folded holds the groups folded away, as "<view>/<heading>".
 	folded map[string]bool
 }
@@ -33,17 +40,13 @@ func newViewState(now time.Time) viewState {
 	}
 }
 
-// What the keyboard is asked to go to, in viewState.focus.
-const (
-	focusTitle = "title"
-)
-
 const (
 	navWidth = 208
 )
 
 // View builds the page: the views to choose from, the tasks of
-// the one chosen, and the details of the task opened, if one is.
+// the one chosen, and the details of the task opened, if one is; over it,
+// the dialog that adds a task, when asked for.
 func (t *Todo) View(c *ui.Context) {
 	// The page is one card, as tall as the sidebar beside it, its parts set
 	// apart by grooves.
@@ -56,6 +59,7 @@ func (t *Todo) View(c *ui.Context) {
 			})
 		})
 	})
+	t.adder(c)
 }
 
 // nav lists the views, then what is done: each with how many tasks it has
@@ -220,7 +224,7 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 			}
 			add := mallow.IconButton(c, "添加任务", mallow.GlyphPlus, mallow.IconButtonStyle{Size: 36, Active: true})
 			if add.Clicked() {
-				t.start()
+				t.startAdding()
 			}
 		}()
 		if t.ui.view == viewWeek {
@@ -239,36 +243,73 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 	})
 }
 
-// start adds a task without a title yet and opens it, the keyboard in its
-// title: due today, but in the week view in the week shown (today, if that
-// is this week, else its Monday).
-func (t *Todo) start() {
+// startAdding shows the dialog that adds a task, its draft due today, but
+// in the week view in the week shown (today, if that is this week, else its
+// Monday).
+func (t *Todo) startAdding() {
 	t.closeOpen()
-	k := Task{}
 	today := t.Today()
-	k.Due = today
+	k := Task{Due: today}
 	if t.ui.view == viewWeek && mondayOf(today) != t.ui.monday {
 		k.Due = t.ui.monday
 	}
-	t.ui.open = t.Start(k).ID
-	t.ui.focus = focusTitle
+	t.ui.draft, t.ui.adding = k, true
+	t.resetCalendar(k.Due)
 }
 
-// closeOpen closes the task that is open; one never given a title goes.
-func (t *Todo) closeOpen() {
-	t.Drop(t.ui.open)
-	t.ui.open = 0
-	if t.ui.focus == focusTitle {
-		t.ui.focus = ""
+// adder is the dialog that adds a task: its title, where the keyboard is,
+// and the rest of what a task has. Enter in the title, or 添加, adds it;
+// Escape, 取消 or a click outside the dialog adds nothing.
+func (t *Todo) adder(c *ui.Context) {
+	k := &t.ui.draft
+	add := func() {
+		if t.Add(*k) != nil {
+			t.ui.adding = false
+		}
+	}
+	mallow.Dialog(c, &t.ui.adding, mallow.DialogOptions{Title: "新任务", Width: 520}, func() {
+		title := mallow.TextInput(c, &k.Title).Placeholder("要做什么？").Label("任务标题").AutoFocus()
+		if title.Submitted() {
+			add()
+		}
+		// The rest scrolls where the window is too low for all of it, as
+		// with the calendar open, so that the buttons stay in reach. The
+		// room around it is for the shadows of what is in it, which a
+		// scroll would cut at its edge.
+		ui.Scroll(c).Shrink(1).MinHeight(0).Margin(0, -10).Padding(4, 10, 10, 10).Gap(14).Children(func() {
+			t.fields(c, k, func() { t.settle(k) })
+		})
+		ui.Row(c).Gap(12).Justify(ui.End).Children(func() {
+			if mallow.Button(c, "取消").Clicked() {
+				t.ui.adding = false
+			}
+			if mallow.PrimaryButton(c, "添加").Disabled(strings.TrimSpace(k.Title) == "").Clicked() {
+				add()
+			}
+		})
+	})
+}
+
+// resetCalendar closes the calendar and turns it to the month of due, or
+// to this one when that is no day.
+func (t *Todo) resetCalendar(due string) {
+	t.ui.calOpen, t.ui.calMonth = false, t.now()
+	if d, err := time.ParseInLocation(dateLayout, due, time.Local); err == nil {
+		t.ui.calMonth = d
 	}
 }
+
+// closeOpen closes the task that is open.
+func (t *Todo) closeOpen() { t.ui.open = 0 }
 
 // openTask opens a task's details, closing those of the one that was open.
 func (t *Todo) openTask(id int) {
-	if id != t.ui.open {
-		t.closeOpen()
-		t.ui.open = id
+	k := t.Task(id)
+	if k == nil || id == t.ui.open {
+		return
 	}
+	t.ui.open, t.ui.title, t.ui.titleWas = id, k.Title, k.Title
+	t.resetCalendar(k.Due)
 }
 
 // withOpen keeps the task that is open in the list: edited so that the
@@ -377,22 +418,6 @@ func (t *Todo) row(c *ui.Context, k *Task, dated bool) {
 // that edits it. The title and the note are on it as written; the rest is a
 // line each below, and the calendar shows when asked for.
 func (t *Todo) detail(c *ui.Context, k *Task) {
-	today := t.Today()
-	if t.ui.calFor != k.ID {
-		// The calendar opens on the month the task is due in.
-		t.ui.calFor, t.ui.calMonth, t.ui.calOpen = k.ID, t.now(), false
-		if d, err := time.ParseInLocation(dateLayout, k.Due, time.Local); err == nil {
-			t.ui.calMonth = d
-		}
-	}
-	line := func(name string, width float32, control func()) {
-		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-			mallow.Label(c, name).Width(48).Shrink(0)
-			// A column, which stretches what is in it: a Segmented set
-			// in a row is only as wide as its shortest label asks.
-			ui.Column(c).Grow(1).MinWidth(0).MaxWidth(width).Children(control)
-		})
-	}
 	card := mallow.Card(c, mallow.Small).Margin(10, 4).Padding(12, 16, 16, 12).Gap(12)
 	card.OnShortcut(0, ui.KeyEscape, func() { t.closeOpen() })
 	card.Children(func() {
@@ -401,19 +426,21 @@ func (t *Todo) detail(c *ui.Context, k *Task) {
 			if mallow.CheckMark(c, &done, "完成这项任务").Changed() {
 				t.SetDone(k, done)
 			}
-			title := mallow.TextInput(c, &k.Title).Placeholder("要做什么？").Label("任务标题").Grow(1).MinWidth(0).Margin(0, 8, 0, 4).
-				FocusBind(&t.ui.focus, focusTitle)
+			title := mallow.TextInput(c, &t.ui.title).Placeholder("要做什么？").Label("任务标题").Grow(1).MinWidth(0).Margin(0, 8, 0, 4)
 			if title.Changed() {
+				// A task is never left without a title: while the field
+				// is empty, it keeps the one it had as its details opened.
+				k.Title = strings.TrimSpace(t.ui.title)
+				if k.Title == "" {
+					k.Title = t.ui.titleWas
+				}
 				t.Changed(k)
 			}
 			// Enter is done writing: the details close.
 			if title.Submitted() {
 				t.closeOpen()
 			}
-			// A task not given a title yet has nothing to delete: closing
-			// it drops it.
-			if strings.TrimSpace(k.Title) != "" &&
-				mallow.GhostIconButton(c, "删除任务", mallow.GlyphTrash, mallow.IconButtonStyle{Danger: true}).Clicked() {
+			if mallow.GhostIconButton(c, "删除任务", mallow.GlyphTrash, mallow.IconButtonStyle{Danger: true}).Clicked() {
 				t.Remove(k)
 				t.ui.open = 0
 			}
@@ -422,53 +449,69 @@ func (t *Todo) detail(c *ui.Context, k *Task) {
 			}
 		})
 		ui.Column(c).Padding(0, 4, 0, 36).Gap(14).Children(func() {
-			if mallow.TextArea(c, &k.Note).Placeholder("备注").Label("备注").MinHeight(48).Changed() {
-				t.Changed(k)
-			}
-			line("日期", 640, func() {
-				ui.Row(c).Grow(1).Gap(8).Wrap().Children(func() {
-					quick := false
-					for _, q := range []struct{ name, date string }{
-						{"今天", today}, {"明天", addDays(today, 1)}, {"下周一", addDays(mondayOf(today), 7)}, {"无日期", ""},
-					} {
-						quick = quick || k.Due == q.date
-						if mallow.Chip(c, q.name, k.Due == q.date).Clicked() {
-							k.Due = q.date
-							if q.date == "" {
-								k.Repeat = RepeatNone
-							}
-							t.ui.calOpen = false
-							t.Changed(k)
-						}
-					}
-					// The last chip is the day itself when it is none of
-					// those, and brings the calendar. It is on only as
-					// the day chosen: with the calendar open under one of
-					// the others, two would look chosen.
-					other := "其他日期"
-					if !quick {
-						other = shortDate(k.Due, today)
-					}
-					if mallow.Chip(c.Key("other"), other, !quick).Label("其他日期").Clicked() {
-						t.ui.calOpen = !t.ui.calOpen
-					}
-				})
-			})
-			if t.ui.calOpen {
-				ui.Column(c).Padding(0, 0, 0, 60).MaxWidth(360).Children(func() {
-					if mallow.Calendar(c, "选择日期", &t.ui.calMonth, &k.Due, t.now()) {
-						t.Changed(k)
-					}
-				})
-			}
-			line("重复", 300, func() {
-				if mallow.Segmented(c, "重复", &k.Repeat, []mallow.Option{
-					{Value: RepeatNone, Label: "不重复"}, {Value: RepeatDaily, Label: "每天"},
-					{Value: RepeatWeekly, Label: "每周"}, {Value: RepeatMonthly, Label: "每月"},
-				}) {
-					t.Changed(k)
-				}
-			})
+			t.fields(c, k, func() { t.Changed(k) })
 		})
+	})
+}
+
+// fields are what a task has besides its title, each to be changed: the
+// note, the day it is due, picked from a calendar when asked for, and the
+// repeat. changed runs after one of them changed. They go in a column.
+func (t *Todo) fields(c *ui.Context, k *Task, changed func()) {
+	today := t.Today()
+	line := func(name string, width float32, control func()) {
+		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+			mallow.Label(c, name).Width(48).Shrink(0)
+			// A column, which stretches what is in it: a Segmented set
+			// in a row is only as wide as its shortest label asks.
+			ui.Column(c).Grow(1).MinWidth(0).MaxWidth(width).Children(control)
+		})
+	}
+	if mallow.TextArea(c, &k.Note).Placeholder("备注").Label("备注").MinHeight(48).Changed() {
+		changed()
+	}
+	line("日期", 640, func() {
+		ui.Row(c).Grow(1).Gap(8).Wrap().Children(func() {
+			quick := false
+			for _, q := range []struct{ name, date string }{
+				{"今天", today}, {"明天", addDays(today, 1)}, {"下周一", addDays(mondayOf(today), 7)}, {"无日期", ""},
+			} {
+				quick = quick || k.Due == q.date
+				if mallow.Chip(c, q.name, k.Due == q.date).Clicked() {
+					k.Due = q.date
+					if q.date == "" {
+						k.Repeat = RepeatNone
+					}
+					t.ui.calOpen = false
+					changed()
+				}
+			}
+			// The last chip is the day itself when it is none of
+			// those, and brings the calendar. It is on only as
+			// the day chosen: with the calendar open under one of
+			// the others, two would look chosen.
+			other := "其他日期"
+			if !quick {
+				other = shortDate(k.Due, today)
+			}
+			if mallow.Chip(c.Key("other"), other, !quick).Label("其他日期").Clicked() {
+				t.ui.calOpen = !t.ui.calOpen
+			}
+		})
+	})
+	if t.ui.calOpen {
+		ui.Column(c).Padding(0, 0, 0, 60).MaxWidth(360).Children(func() {
+			if mallow.Calendar(c, "选择日期", &t.ui.calMonth, &k.Due, t.now()) {
+				changed()
+			}
+		})
+	}
+	line("重复", 300, func() {
+		if mallow.Segmented(c, "重复", &k.Repeat, []mallow.Option{
+			{Value: RepeatNone, Label: "不重复"}, {Value: RepeatDaily, Label: "每天"},
+			{Value: RepeatWeekly, Label: "每周"}, {Value: RepeatMonthly, Label: "每月"},
+		}) {
+			changed()
+		}
 	})
 }

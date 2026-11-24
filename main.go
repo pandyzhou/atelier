@@ -105,7 +105,10 @@ func (a *app) view(c *ui.Context) {
 	c.SetZoom(zoomOf(a.settings.Size))
 	mallow.UseStyle(c, mallow.Style(a.settings.Style), mallow.Mode(a.settings.Appearance))
 	// Lines are as high for every font: left to the font, each sets its
-	// own, and choosing another moves everything on the page.
+	// own, and choosing another moves everything on the page. What shows
+	// over the window, as a dialog, inherits nothing from the page: mallow
+	// is told for those.
+	mallow.LineHeight = lineHeight
 	ui.Column(c).Fill().LineHeight(lineHeight).Children(func() {
 		mallow.TitleBar(c, a.win, nil)
 		a.body(c)

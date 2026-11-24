@@ -77,7 +77,7 @@ func newAt(s *store.Store, now func() time.Time) *Todo {
 	if !t.data.Migrated {
 		t.migrateWeekly()
 	}
-	// Tasks started and never given a title.
+	// Tasks an older version started and left without a title.
 	t.data.Tasks = slices.DeleteFunc(t.data.Tasks, func(k *Task) bool { return strings.TrimSpace(k.Title) == "" })
 	t.ui = newViewState(t.now())
 	return t
@@ -109,9 +109,7 @@ func (t *Todo) Add(k Task) *Task {
 	if k.Title == "" {
 		return nil
 	}
-	if k.Repeat != RepeatNone && k.Due == "" {
-		k.Due = t.Today()
-	}
+	t.settle(&k)
 	t.data.Next++
 	k.ID = t.data.Next
 	t.data.Tasks = append(t.data.Tasks, &k)
@@ -119,36 +117,18 @@ func (t *Todo) Add(k Task) *Task {
 	return &k
 }
 
-// Start adds a task that has no title yet, to be written in its details,
-// and returns it. One left without a title is dropped: by Drop when its
-// details close, and on the next start if the app closed before that.
-func (t *Todo) Start(k Task) *Task {
+// settle keeps what must hold of a task: one that repeats has a due date.
+func (t *Todo) settle(k *Task) {
 	if k.Repeat != RepeatNone && k.Due == "" {
 		k.Due = t.Today()
 	}
-	t.data.Next++
-	k.ID = t.data.Next
-	t.data.Tasks = append(t.data.Tasks, &k)
-	t.save()
-	return &k
 }
 
-// Drop removes the task of an ID if it has no title, and reports whether
-// it did.
-func (t *Todo) Drop(id int) bool {
-	k := t.Task(id)
-	if k == nil || strings.TrimSpace(k.Title) != "" {
-		return false
-	}
-	t.Remove(k)
-	return true
-}
-
-// Changed saves after a task was edited in place, and keeps what
-// must hold: a repeating task has a due date.
+// Changed saves after a task was edited in place, and keeps what must hold
+// of it.
 func (t *Todo) Changed(k *Task) {
-	if k != nil && k.Repeat != RepeatNone && k.Due == "" {
-		k.Due = t.Today()
+	if k != nil {
+		t.settle(k)
 	}
 	t.save()
 }
