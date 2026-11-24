@@ -37,17 +37,18 @@ func TestViews(t *testing.T) {
 	d := newTest("")
 	d.Add(Task{Title: "过期的", Due: "2026-11-24"})
 	d.Add(Task{Title: "今天的", Due: "2026-11-25"})
-	d.Add(Task{Title: "要紧的", Due: "2026-11-25", Priority: PriorityHigh})
+	// A priority of old does not put a task before an older one.
+	d.Add(Task{Title: "后加的", Due: "2026-11-25", Priority: 3})
 	d.Add(Task{Title: "周五的", Due: "2026-11-27"})
 	d.Add(Task{Title: "下个月的", Due: "2026-12-20"})
 	d.Add(Task{Title: "没日期的"})
 	d.SetDone(d.Add(Task{Title: "做完的", Due: "2026-11-25"}), true)
 
-	equal(t, "today", titles(d, viewToday), "已过期: 过期的", "今天: 要紧的 今天的", "今天完成的: 做完的")
-	equal(t, "next 7 days", titles(d, viewNext7), "已过期: 过期的", "今天: 要紧的 今天的", "周五: 周五的")
-	equal(t, "week", titles(d, viewWeek), "周二: 过期的", "周三: 要紧的 今天的 做完的", "周五: 周五的")
+	equal(t, "today", titles(d, viewToday), "已过期: 过期的", "今天: 今天的 后加的", "今天完成的: 做完的")
+	equal(t, "next 7 days", titles(d, viewNext7), "已过期: 过期的", "今天: 今天的 后加的", "周五: 周五的")
+	equal(t, "week", titles(d, viewWeek), "周二: 过期的", "周三: 今天的 后加的 做完的", "周五: 周五的")
 	equal(t, "all", titles(d, viewAll),
-		"已过期: 过期的", "今天: 要紧的 今天的", "最近 7 天: 周五的", "以后: 下个月的", "没有日期: 没日期的")
+		"已过期: 过期的", "今天: 今天的 后加的", "最近 7 天: 周五的", "以后: 下个月的", "没有日期: 没日期的")
 	equal(t, "done", titles(d, viewDone), "今天完成: 做完的")
 }
 
@@ -79,20 +80,20 @@ func TestRepeat(t *testing.T) {
 }
 
 // Tasks are there again after a restart, those of a list of old too: lists
-// are gone, what was in them is not.
+// and priorities are gone, what had them is not, and keeps them as saved.
 func TestSaving(t *testing.T) {
 	dir := t.TempDir()
 	d := newTest(dir)
 	d.data.Lists = []*List{{ID: 7, Name: "生活"}}
-	d.Add(Task{Title: "买菜", List: 7, Note: "鸡蛋", Priority: PriorityMid})
+	d.Add(Task{Title: "买菜", List: 7, Note: "鸡蛋", Priority: 2})
 
 	again := newTest(dir)
 	if len(again.Tasks()) != 1 || again.Tasks()[0].Note != "鸡蛋" {
 		t.Fatalf("after a restart: tasks %+v", again.Tasks())
 	}
 	equal(t, "all, with a task of a list of old", titles(again, viewAll), "今天:", "没有日期: 买菜")
-	if k := again.Tasks()[0]; k.List != 7 || len(again.data.Lists) != 1 {
-		t.Errorf("the list of old was not kept: task %+v, lists %+v", k, again.data.Lists)
+	if k := again.Tasks()[0]; k.List != 7 || k.Priority != 2 || len(again.data.Lists) != 1 {
+		t.Errorf("the list and priority of old were not kept: task %+v, lists %+v", k, again.data.Lists)
 	}
 }
 

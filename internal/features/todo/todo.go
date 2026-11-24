@@ -1,6 +1,6 @@
 // Package todo is the to-do list: tasks, each with an optional due date, a
-// priority, a note and a repeat, seen through views (today, the next seven
-// days, a week, everything, what is done).
+// note and a repeat, seen through views (today, the next seven days, a
+// week, everything, what is done).
 package todo
 
 import (
@@ -16,14 +16,6 @@ import (
 // dateLayout is how dates are saved: "2026-11-23", which sort as the days do.
 const dateLayout = "2006-01-02"
 
-// Priorities.
-const (
-	PriorityNone = iota
-	PriorityLow
-	PriorityMid
-	PriorityHigh
-)
-
 // Repeats.
 const (
 	RepeatNone    = ""
@@ -37,11 +29,12 @@ type Task struct {
 	ID    int    `json:"id"`
 	Title string `json:"title"`
 	Note  string `json:"note,omitempty"`
-	// List is the list the task was in when tasks had lists. Nothing
-	// shows it now; it is kept as it was saved.
+	// List is the list the task was in when tasks had lists, and Priority
+	// how much it mattered, from 1 to 3, when they had that. Nothing shows
+	// them or goes by them now; they are kept as they were saved.
 	List     int    `json:"list,omitempty"`
-	Due      string `json:"due,omitempty"` // a date, "" for none
 	Priority int    `json:"priority,omitempty"`
+	Due      string `json:"due,omitempty"` // a date, "" for none
 	// Repeat makes the task come back: checked off, it leaves a done copy
 	// and moves its Due to the next time. A repeating task has a Due.
 	Repeat string `json:"repeat,omitempty"`
@@ -214,7 +207,7 @@ func (t *Todo) save() {
 }
 
 // byOrder sorts tasks for a list: the earlier due first, those without a
-// date last, then the higher priority, then the older.
+// date last, then the older.
 func byOrder(a, b *Task) int {
 	if (a.Due == "") != (b.Due == "") {
 		if a.Due == "" {
@@ -222,7 +215,7 @@ func byOrder(a, b *Task) int {
 		}
 		return -1
 	}
-	return cmp.Or(cmp.Compare(a.Due, b.Due), cmp.Compare(b.Priority, a.Priority), cmp.Compare(a.ID, b.ID))
+	return cmp.Or(cmp.Compare(a.Due, b.Due), cmp.Compare(a.ID, b.ID))
 }
 
 // addDays returns the date n days after date.

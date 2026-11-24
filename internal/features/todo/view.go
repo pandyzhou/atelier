@@ -339,21 +339,9 @@ func (t *Todo) group(c *ui.Context, g group) {
 	})
 }
 
-var priorityMarks = [...]string{"", "!", "!!", "!!!"}
-
-func priorityColor(p int) ui.Color {
-	switch p {
-	case PriorityHigh:
-		return mallow.Danger
-	case PriorityMid:
-		return mallow.Accent
-	}
-	return mallow.Muted
-}
-
 // row is a task in the list: its check, and the rest, which opens its
-// details: its priority, its title, then what the heading does not say
-// already, as its due date.
+// details: its title, then what the heading does not say already, as its
+// due date.
 func (t *Todo) row(c *ui.Context, k *Task, dated bool) {
 	today := t.Today()
 	row := mallow.ListRow(c, false)
@@ -365,9 +353,6 @@ func (t *Todo) row(c *ui.Context, k *Task, dated bool) {
 		}
 		body := mallow.Plain(c, "打开"+k.Title).Grow(1).MinWidth(0).Padding(7, 4).Gap(8)
 		body.Children(func() {
-			if k.Priority != PriorityNone && !k.Done {
-				ui.Text(c, priorityMarks[k.Priority]).FontSize(14).FontWeight(700).TextColor(priorityColor(k.Priority))
-			}
 			title := ui.Text(c, k.Title).Grow(1).MinWidth(0).FontSize(14).TextColor(mallow.Text)
 			if k.Done {
 				title.TextColor(mallow.Muted).Strikethrough()
@@ -476,15 +461,6 @@ func (t *Todo) detail(c *ui.Context, k *Task) {
 					}
 				})
 			}
-			line("优先级", 220, func() {
-				priority := strconv.Itoa(k.Priority)
-				if mallow.Segmented(c, "优先级", &priority, []mallow.Option{
-					{Value: "0", Label: "无"}, {Value: "1", Label: "低"}, {Value: "2", Label: "中"}, {Value: "3", Label: "高"},
-				}) {
-					k.Priority, _ = strconv.Atoi(priority)
-					t.Changed(k)
-				}
-			})
 			line("重复", 300, func() {
 				if mallow.Segmented(c, "重复", &k.Repeat, []mallow.Option{
 					{Value: RepeatNone, Label: "不重复"}, {Value: RepeatDaily, Label: "每天"},

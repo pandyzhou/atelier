@@ -67,8 +67,8 @@ func TestTodoDetail(t *testing.T) {
 	d, tt := newTodoTester(t)
 	add(t, tt, "交水电费")
 	k := d.Tasks()[0]
-	click(t, tt, "打开交水电费", "下周一", "高", "每月")
-	if k.Due <= d.Today() || k.Priority != todo.PriorityHigh || k.Repeat != todo.RepeatMonthly {
+	click(t, tt, "打开交水电费", "下周一", "每月")
+	if k.Due <= d.Today() || k.Repeat != todo.RepeatMonthly {
 		t.Fatalf("after editing: %+v", k)
 	}
 	due := k.Due
@@ -109,12 +109,14 @@ func TestTodoContextMenus(t *testing.T) {
 	}
 }
 
-// Tasks are not sorted into lists: nothing of lists shows.
-func TestTodoNoLists(t *testing.T) {
-	_, tt := newTodoTester(t)
-	add(t, tt, "Buy milk")
+// Tasks are not sorted into lists and have no priority: nothing of either
+// shows, for a task that was saved with them too.
+func TestTodoNoListsOrPriority(t *testing.T) {
+	d, tt := newTodoTester(t)
+	d.Add(todo.Task{Title: "Buy milk", Due: d.Today(), List: 7, Priority: 3})
+	tt.Frame()
 	click(t, tt, "打开Buy milk")
-	for _, text := range []string{"清单", "收集箱", "新建清单"} {
+	for _, text := range []string{"清单", "收集箱", "新建清单", "优先级", "!!!"} {
 		if tt.HasText(text) {
 			t.Errorf("the page shows %q: %q", text, tt.Texts())
 		}
@@ -251,12 +253,12 @@ func TestScreenshot(t *testing.T) {
 	today, _ := time.Parse("2006-01-02", d.Today())
 	day := func(n int) string { return today.AddDate(0, 0, n).Format("2006-01-02") }
 	for _, k := range []todo.Task{
-		{Title: "交水电费", Due: day(-1), Priority: todo.PriorityHigh},
-		{Title: "写周报", Due: day(0), Repeat: todo.RepeatWeekly, Priority: todo.PriorityMid},
+		{Title: "交水电费", Due: day(-1)},
+		{Title: "写周报", Due: day(0), Repeat: todo.RepeatWeekly},
 		{Title: "修登录页的 bug", Due: day(0), Note: "复现步骤在群里"},
 		{Title: "跑步 30 分钟", Due: day(0), Repeat: todo.RepeatDaily},
 		{Title: "给家里打电话", Due: day(1)},
-		{Title: "读完《置身事内》", Due: day(3), Priority: todo.PriorityLow},
+		{Title: "读完《置身事内》", Due: day(3)},
 		{Title: "采购日用品", Due: day(5)},
 		{Title: "整理书架"},
 	} {
@@ -341,9 +343,9 @@ func TestStyle(t *testing.T) {
 	// The to-do page works as it does in the other look.
 	click(t, tt, "待办")
 	add(t, tt, "Buy milk")
-	click(t, tt, "打开Buy milk", "高", "关闭详情")
-	if !tt.HasText("Buy milk") || !tt.HasText("!!!") {
-		t.Errorf("the task edited on the organic to-do page: %q", tt.Texts())
+	click(t, tt, "打开Buy milk", "每周", "关闭详情")
+	if k := a.current().(*todo.Todo).Tasks()[0]; !tt.HasText("Buy milk") || k.Repeat != todo.RepeatWeekly {
+		t.Errorf("the task edited on the organic to-do page: %+v, %q", k, tt.Texts())
 	}
 	b := newApp(store.Open(dir))
 	ui.NewTester(b.view, 1280, 800).Frame()
