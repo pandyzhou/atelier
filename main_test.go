@@ -554,6 +554,34 @@ func TestTimetable(t *testing.T) {
 	if !tt.HasText("高等数学") || !tt.HasText("A301") || tt.HasText("编辑课程") {
 		t.Fatalf("the course does not show on the grid: %q", tt.Texts())
 	}
+	// A click on a free cell adds a course there, and a press drawn over
+	// cells one that takes them all, from whichever end it began.
+	click(t, tt, "周五第2节")
+	if !tt.HasText("新课程") || !tt.HasText("节次：第 2 节") {
+		t.Fatalf("a click on a cell: %q", tt.Texts())
+	}
+	click(t, tt, "取消")
+	first, _ := tt.Find("周五第6节")
+	last, _ := tt.Find("周五第8节")
+	tt.Press(last.X+last.W/2, last.Y+last.H/2)
+	tt.Move(first.X+first.W/2, first.Y+first.H/2)
+	tt.Frame()
+	if tt.HasText("新课程") {
+		t.Fatalf("the dialog shows before the pointer lets go: %q", tt.Texts())
+	}
+	tt.Release(first.X+first.W/2, first.Y+first.H/2)
+	tt.Frame()
+	if !tt.HasText("新课程") || !tt.HasText("节次：第 6–8 节") {
+		t.Fatalf("after drawing over three cells: %q", tt.Texts())
+	}
+	tt.Type("实验")
+	click(t, tt, "添加")
+	if k := tb.Courses()[1]; len(tb.Courses()) != 2 || k.Name != "实验" || k.Day != 4 || k.From != 6 || k.To != 8 {
+		t.Fatalf("the course drawn: %+v", k)
+	}
+	tb.Remove(tb.Courses()[1].ID)
+	tt.Frame()
+
 	// It is two rows high.
 	one, _ := tt.Find("周三第3节")
 	block, ok := tt.Find("打开高等数学")
@@ -957,10 +985,11 @@ func TestHome(t *testing.T) {
 	}
 	click(t, bt, first)
 	bt.Frame()
-	if !bt.HasText("不客气。") {
+	// Opening one shuts the panel, which floats over the page.
+	if !bt.HasText("不客气。") || bt.HasText("打开对话：明天有哪些课？") {
 		t.Errorf("after a restart, the conversation opened: %q", bt.Texts())
 	}
-	click(t, bt, "删除对话：明天有哪些课？")
+	click(t, bt, "历史对话", "删除对话：明天有哪些课？")
 	bt.Frame()
 	if shown(bt, "打开对话：明天有哪些课？") != 0 || len(newApp(store.Open(dir)).features[0].(*home.Home).Conversations()) != 1 {
 		t.Errorf("after deleting a conversation: %q", bt.Texts())
@@ -1776,7 +1805,7 @@ func TestAttachments(t *testing.T) {
 	if got := asked[len(asked)-1].Messages; len(asked) != 3 || !bytes.Equal(got[0].Images[0].Data, shot.Bytes()) {
 		t.Fatalf("after the restart, asked %d times with %+v", len(asked), got[0].Images)
 	}
-	click(t, tb, "删除对话：看看这些")
+	click(t, tb, "历史对话", "删除对话：看看这些")
 	if len(saved()) != 0 {
 		t.Errorf("the pictures of a deleted conversation are kept: %q", saved())
 	}

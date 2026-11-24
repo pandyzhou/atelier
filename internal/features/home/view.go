@@ -45,13 +45,15 @@ func fresh() viewState { return viewState{growing: -1, copied: -1} }
 var suggestions = []string{"今天有什么安排？", "明天有哪些课？", "这周还有哪些任务没做？"}
 
 const (
-	width      = 720 // how wide the conversation and the field are at most
-	panelWidth = 248 // how wide the saved conversations' panel is
+	width       = 720 // how wide the conversation and the field are at most
+	panelWidth  = 280 // how wide the saved conversations' panel is
+	panelHeight = 420 // how high its list is at most
 )
 
 // View builds the page: before anything is said, the field in the middle
 // with things to ask under it; then the conversation over the field. The
-// conversations saved are in a panel at the right, shut until asked for.
+// conversations saved are in a panel that floats over the page, from a button
+// at the right, shut until asked for.
 func (h *Home) View(c *ui.Context) {
 	ui.Row(c).Fill().Padding(0, 28, 0, 16).AlignItems(ui.Stretch).Children(func() {
 		mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0).Children(func() {
@@ -70,10 +72,6 @@ func (h *Home) View(c *ui.Context) {
 						h.conversation(c)
 					}
 				})
-				if h.ui.panel {
-					mallow.GrooveV(c).Margin(24, 0)
-					h.saved(c)
-				}
 			})
 		})
 	})
@@ -93,20 +91,21 @@ func (h *Home) bar(c *ui.Context) {
 		if button.Clicked() {
 			h.ui.panel = !h.ui.panel
 		}
+		mallow.Popover(c, button, &h.ui.panel, func() { h.saved(c) })
 	})
 }
 
 // saved is the panel of the conversations saved, the newest first: a click
 // opens one to go on with.
 func (h *Home) saved(c *ui.Context) {
-	ui.Column(c).Width(panelWidth).Shrink(0).Padding(24, 12, 16, 12).Gap(8).Children(func() {
+	ui.Column(c).Width(panelWidth).Padding(6, 4, 4, 4).Gap(8).Children(func() {
 		mallow.Label(c, "历史对话").PaddingX(8)
 		if len(h.data.Conversations) == 0 {
 			ui.Text(c, "还没有保存的对话。").FontSize(13).TextColor(mallow.Muted).Padding(8)
 			return
 		}
 		open, drop := 0, 0
-		ui.Scroll(c).Label("历史对话列表").Grow(1).MinHeight(0).Gap(2).Children(func() {
+		ui.Scroll(c).Label("历史对话列表").MaxHeight(panelHeight).Gap(2).Children(func() {
 			group := ""
 			for _, k := range h.data.Conversations {
 				if g := h.when(k.Updated); g != group {
@@ -132,6 +131,7 @@ func (h *Home) saved(c *ui.Context) {
 			h.Delete(drop)
 		case open != 0:
 			h.Open(open)
+			h.ui.panel = false
 		}
 	})
 }

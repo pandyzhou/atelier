@@ -19,7 +19,13 @@ type viewState struct {
 	problem string
 	// periods is whether the dialog of the day's periods shows.
 	periods bool
-	menus   map[string]*bool
+	// span is the periods being dragged over on a day's column, for a
+	// course to add: from the one pressed to the one the pointer is on.
+	span struct {
+		on            bool
+		day, from, to int
+	}
+	menus map[string]*bool
 }
 
 const (
@@ -50,7 +56,7 @@ func (t *Timetable) View(c *ui.Context) {
 			t.grid(c)
 		})
 		if mallow.ContextMenu(c, page, t.menuOpen("page"), []mallow.MenuEntry{newEntry}) == newEntry.ID {
-			t.startAdding(t.today(), 1)
+			t.startAdding(t.today(), 1, 1)
 		}
 	})
 	t.editor(c)
@@ -116,17 +122,44 @@ func (t *Timetable) grid(c *ui.Context) {
 	})
 }
 
-// day is a day's column: a cell for each period, a right click on which
-// adds a course there, and the day's courses over them.
+// day is a day's column: a cell for each period, and the day's courses
+// over them. A click on a free cell adds a course there, and a press drawn
+// down or up over several adds one that takes them all; a right click
+// offers the same for the one cell.
 func (t *Timetable) day(c *ui.Context, day int, row float32) {
-	ui.Column(c).Grow(1).Basis(0).MinWidth(0).Children(func() {
+	n := len(t.data.Periods)
+	column := ui.Column(c).Grow(1).Basis(0).MinWidth(0)
+	_, y, _ := column.PointerPosition()
+	column.Children(func() {
+		pressed := 0 // the period whose cell is pressed, 0 for none
 		for i := range t.data.Periods {
-			cell := ui.Column(c.Key(i)).Label(fmt.Sprintf("%s第%d节", dayNames[day], i+1)).Height(row)
+			cell := ui.Column(c.Key(i)).Label(fmt.Sprintf("%s第%d节", dayNames[day], i+1)).Height(row).Cursor(ui.CursorPointer)
 			cell.Children(func() { mallow.Groove(c) })
+			// Held with the primary button, wherever the pointer went
+			// since: Pressed is only while it is still over the cell.
+			if button, held := cell.PressedButton(); held && button == 0 {
+				pressed = i + 1
+			}
+			if cell.PressCanceled() && t.ui.span.day == day {
+				t.ui.span.on = false
+			}
 			key := fmt.Sprintf("cell:%d:%d", day, i)
 			if mallow.ContextMenu(c.Key(key), cell, t.menuOpen(key), []mallow.MenuEntry{newEntry}) == newEntry.ID {
-				t.startAdding(day, i+1)
+				t.startAdding(day, i+1, i+1)
 			}
+		}
+		span := &t.ui.span
+		switch {
+		case pressed > 0:
+			// From the cell pressed to the one the pointer is over now.
+			at := min(max(int(y/row)+1, 1), n)
+			span.on, span.day, span.from, span.to = true, day, min(pressed, at), max(pressed, at)
+			ui.Box(c).Absolute().Left(4).Right(4).Top(float32(span.from-1)*row+6).Height(float32(span.to-span.from+1)*row-9).
+				Radius(mallow.RadiusSmall).Background(mallow.Accent.Alpha(0.16)).Border(1, mallow.Accent.Alpha(0.5))
+		case span.on && span.day == day:
+			// Let go: the course to add takes what was drawn over.
+			span.on = false
+			t.startAdding(day, span.from, span.to)
 		}
 		for _, k := range t.data.Courses {
 			if k.Day == day {
@@ -165,7 +198,7 @@ func (t *Timetable) block(c *ui.Context, k *Course, row float32) {
 		{ID: "delete", Label: "删除课程", Glyph: mallow.GlyphTrash, Danger: true},
 	}) {
 	case "new":
-		t.startAdding(k.Day, k.To+1)
+		t.startAdding(k.Day, k.To+1, k.To+1)
 	case "edit":
 		t.startEditing(k)
 	case "delete":
@@ -173,10 +206,12 @@ func (t *Timetable) block(c *ui.Context, k *Course, row float32) {
 	}
 }
 
-// startAdding shows the dialog of a course to add, on a day from a period.
-func (t *Timetable) startAdding(day, period int) {
-	period = min(max(period, 1), len(t.data.Periods))
-	t.ui.draft, t.ui.problem, t.ui.editing = Course{Day: day, From: period, To: period}, "", true
+// startAdding shows the dialog of a course to add, on a day over periods.
+func (t *Timetable) startAdding(day, from, to int) {
+	n := len(t.data.Periods)
+	from = min(max(from, 1), n)
+	to = min(max(to, from), n)
+	t.ui.draft, t.ui.problem, t.ui.editing = Course{Day: day, From: from, To: to}, "", true
 }
 
 // startEditing shows the dialog of a course there is.
@@ -241,6 +276,7 @@ func (t *Timetable) editor(c *ui.Context) {
 					t.ui.problem = ""
 				}
 			})
+			ui.Text(c, "一门课连着上几节时，点它的第一节和最后一节。").FontSize(12).TextColor(mallow.Muted)
 		})
 		if t.ui.problem != "" {
 			ui.Text(c, t.ui.problem).FontSize(13).TextColor(mallow.Danger)
