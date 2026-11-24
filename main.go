@@ -168,9 +168,11 @@ func version() string {
 	return "开发版"
 }
 
-// lineHeight is the height of a line of text, as a multiple of its size:
-// about what the default font sets for itself.
-const lineHeight = 1.3
+// lineHeight is the height of a line of text, as a multiple of its size. A
+// line is never lower than its font's own ascent and descent, so this is
+// more than the tallest of the fonts to choose from has: Source Han Sans,
+// 1.45.
+const lineHeight = 1.5
 
 // defaultFont is the family text is set in unless another is chosen.
 const defaultFont = "Microsoft YaHei UI"
