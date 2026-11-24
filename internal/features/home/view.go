@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 	"github.com/pandyzhou/mallow"
 
@@ -29,6 +30,13 @@ type viewState struct {
 	panel   bool               // the saved conversations show at the side
 	picking bool               // the models to choose from show
 	query   string             // what is typed to find one of them
+	pending []pending          // the files to send with the next message
+	loading int                // how many more of them are being read
+	note    string             // what could not be attached, and why
+	over    bool               // files are dragged over the page
+	// thumbs are the conversation's pictures as they show, by what they
+	// are kept under: nil for one that is no longer there.
+	thumbs map[string]*ui.Bitmap
 }
 
 func fresh() viewState { return viewState{growing: -1, copied: -1} }
@@ -48,7 +56,13 @@ func (h *Home) View(c *ui.Context) {
 	ui.Row(c).Fill().Padding(0, 28, 0, 16).AlignItems(ui.Stretch).Children(func() {
 		mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0).Children(func() {
 			ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
-				ui.Column(c).Grow(1).MinWidth(0).Padding(20, 28, 24, 28).Children(func() {
+				// Files dropped anywhere on the page go with the next message.
+				page := ui.Column(c).Grow(1).MinWidth(0).Padding(20, 28, 24, 28)
+				if files := page.DroppedFiles(); len(files) > 0 {
+					h.Attach(files...)
+				}
+				h.ui.over = page.FileDragOver()
+				page.Children(func() {
 					h.bar(c)
 					if len(h.ui.entries) == 0 {
 						h.start(c)
@@ -170,38 +184,175 @@ func centered(c *ui.Context, gap float32, body func()) {
 }
 
 // field is where the user writes to the assistant, in a tray: Enter sends,
-// Shift and Enter starts a new line. Under what is written, the model
-// asked, to choose another, and the button that sends, or stops the
-// answer that is coming.
+// Shift and Enter starts a new line. Over what is written, the files that
+// go with it; under it, the button that attaches them, the model asked,
+// to choose another, and the button that sends, or stops the answer that
+// is coming.
 func (h *Home) field(c *ui.Context, usable bool) {
 	can := func() bool { return usable && !h.ui.busy }
+	services := c.Services()
 	mallow.Tray(c, mallow.Small).Padding(10, 12, 8, 14).Gap(6).Children(func() {
+		h.attachments(c)
 		in := ui.TextAreaBase(c, &h.ui.draft).Lines(1, 6).MinHeight(0).Placeholder("问日程，或者说要添加什么").Label("给助手的话").
 			FontSize(14).TextColor(mallow.Text).PlaceholderColor(mallow.Muted).FocusRing(false).Padding(4, 0).AutoFocus()
 		in.OnTextKey(func(k ui.TextKey) bool {
 			if k.Key != ui.KeyEnter || k.Mods != 0 {
 				return false // Shift and Enter breaks the line
 			}
-			if text := strings.TrimSpace(k.Text()); text != "" && can() {
+			if text := strings.TrimSpace(k.Text()); (text != "" || len(h.ui.pending) > 0) && can() {
 				k.SetText("")
 				h.Send(text)
 			}
 			return true
 		})
-		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+		// A paste of no text may be of files, or of a picture, as a
+		// screenshot: those are attached.
+		in.OnPaste(func(text string) bool {
+			if text != "" {
+				return false
+			}
+			data := services.ReadClipboardData(transfer.FileList, transfer.PNG)
+			if files, err := data.Files(); err == nil && len(files) > 0 {
+				h.Attach(files...)
+				return true
+			}
+			if picture, err := data.Read(transfer.PNG); err == nil && len(picture) > 0 {
+				h.AttachPicture(picture)
+				return true
+			}
+			return false
+		})
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			if h.PickFiles != nil {
+				attach := mallow.GhostIconButton(c, "添加附件", mallow.GlyphAttach, mallow.IconButtonStyle{})
+				mallow.Tooltip(c, attach, "添加图片或文件")
+				if attach.Clicked() {
+					h.Background(func() func() {
+						paths := h.PickFiles()
+						return func() { h.Attach(paths...) }
+					})
+				}
+			}
 			h.picker(c)
 			ui.Box(c).Grow(1)
 			if h.ui.busy {
 				if mallow.Button(c, "停止").Clicked() {
 					h.Stop()
 				}
-			} else if mallow.PrimaryButton(c, "发送").Disabled(!usable || strings.TrimSpace(h.ui.draft) == "").Clicked() {
+			} else if mallow.PrimaryButton(c, "发送").Disabled(!usable || (strings.TrimSpace(h.ui.draft) == "" && len(h.ui.pending) == 0)).Clicked() {
 				text := h.ui.draft
 				h.ui.draft = ""
 				h.Send(text)
 			}
 		})
 	})
+}
+
+// attachments are the files that go with the next message, each with a
+// button that takes it out again, and a word of those that are still being
+// read, of what could not be attached, or of files dragged over the page.
+func (h *Home) attachments(c *ui.Context) {
+	if len(h.ui.pending) > 0 || h.ui.loading > 0 {
+		drop := -1
+		ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Padding(2, 0, 4, 0).Children(func() {
+			for i := range h.ui.pending {
+				p := &h.ui.pending[i]
+				if p.Type != "" && p.shown == nil {
+					p.shown, _ = ui.DecodeBitmapScaled(p.Data, 96)
+				}
+				if fileChip(c.Key(i), p.Name, p.shown, true) {
+					drop = i
+				}
+			}
+			if h.ui.loading > 0 {
+				ui.Text(c, "正在读取…").FontSize(12).TextColor(mallow.Muted)
+			}
+		})
+		if drop >= 0 {
+			h.Detach(drop)
+		}
+	}
+	switch {
+	case h.ui.over:
+		ui.Text(c, "松开鼠标，把文件添加为附件").FontSize(12).TextColor(mallow.Accent)
+	case h.ui.note != "":
+		ui.Text(c, h.ui.note).FontSize(12).TextColor(mallow.Danger)
+	}
+}
+
+// fileChip shows a file by its name, after its picture if it is one, and
+// when removable a button that takes it out, of which it reports a click.
+func fileChip(c *ui.Context, name string, picture *ui.Bitmap, removable bool) (removed bool) {
+	chip := ui.Row(c).Gap(6).AlignItems(ui.Center).Padding(4, 6, 4, 6).Radius(mallow.RadiusSmall).Shrink(1).MinWidth(0)
+	mallow.Raised(chip, mallow.Tiny)
+	chip.Children(func() {
+		if picture != nil {
+			ui.Box(c).Size(28, 28).Shrink(0).Radius(6).Clip().Children(func() {
+				ui.Image(c, picture).Size(28, 28).Fit(ui.Cover)
+			})
+		} else {
+			ui.Row(c).Size(20, 28).Shrink(0).Justify(ui.Center).AlignItems(ui.Center).Children(func() {
+				mallow.GlyphFile(c, mallow.Muted)
+			})
+		}
+		ui.Text(c, name).FontSize(12).TextColor(mallow.Text).SingleLine().MaxWidth(180).Shrink(1).MinWidth(0)
+		if removable {
+			removed = mallow.GhostIconButton(c, "移除附件："+name, mallow.GlyphClose, mallow.IconButtonStyle{Size: 22}).Clicked()
+		} else {
+			ui.Box(c).Width(2)
+		}
+	})
+	return removed
+}
+
+// thumb returns a picture of the conversation as it shows, nil when it is
+// no longer there.
+func (h *Home) thumb(name string) *ui.Bitmap {
+	if b, ok := h.ui.thumbs[name]; ok {
+		return b
+	}
+	var b *ui.Bitmap
+	if data := h.blob(name); data != nil {
+		b, _ = ui.DecodeBitmapScaled(data, 640)
+	}
+	if h.ui.thumbs == nil {
+		h.ui.thumbs = map[string]*ui.Bitmap{}
+	}
+	h.ui.thumbs[name] = b
+	return b
+}
+
+// The most room a picture of the conversation takes.
+const pictureWidth, pictureHeight = 280, 200
+
+// files shows what a message of the user's came with: its pictures, then
+// its other files by their names.
+func (h *Home) files(c *ui.Context, files []attached) {
+	for i, f := range files {
+		b := (*ui.Bitmap)(nil)
+		if f.Image != "" {
+			b = h.thumb(f.Image)
+		}
+		if b == nil {
+			continue
+		}
+		w, ht := ui.ImageSize(b)
+		if w <= 0 || ht <= 0 {
+			continue
+		}
+		scale := min(pictureWidth/w, pictureHeight/ht, 1)
+		ui.Box(c.Key(fmt.Sprint("picture:", i))).Size(w*scale, ht*scale).Shrink(0).Radius(mallow.RadiusSmall).Clip().Label("图片：" + f.Name).Children(func() {
+			ui.Image(c, b).Size(w*scale, ht*scale)
+		})
+	}
+	for i, f := range files {
+		switch {
+		case f.Image == "":
+			fileChip(c.Key(fmt.Sprint("file:", i)), f.Name, nil, false)
+		case h.thumb(f.Image) == nil:
+			fileChip(c.Key(fmt.Sprint("file:", i)), f.Name+"（图片已不在）", nil, false)
+		}
+	}
 }
 
 // searchable is how many models there are before the list of them has a
@@ -303,10 +454,16 @@ func (h *Home) entry(c *ui.Context, i int, e entry) ui.Element {
 	switch e.Kind {
 	case said:
 		return ui.Row(c).Justify(ui.End).Children(func() {
-			bubble := ui.Column(c).MaxWidth(520).Shrink(1).Padding(8, 14).Radius(mallow.RadiusSmall)
-			mallow.Raised(bubble, mallow.Tiny)
-			bubble.Children(func() {
-				ui.Text(c, e.Text).FontSize(14).TextColor(mallow.Text).Selectable()
+			ui.Column(c).MaxWidth(520).Shrink(1).MinWidth(0).Gap(8).AlignItems(ui.End).Children(func() {
+				h.files(c, e.Files)
+				if e.Text == "" {
+					return
+				}
+				bubble := ui.Column(c).Shrink(1).Padding(8, 14).Radius(mallow.RadiusSmall)
+				mallow.Raised(bubble, mallow.Tiny)
+				bubble.Children(func() {
+					ui.Text(c, e.Text).FontSize(14).TextColor(mallow.Text).Selectable()
+				})
 			})
 		})
 	case action:

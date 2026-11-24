@@ -109,3 +109,17 @@ func (a *app) traySettings(c *ui.Context, row func(name, note string, width floa
 		}
 	})
 }
+
+// pickFiles has the user choose files in the system's dialog, and returns
+// their paths: none when they chose none. It is called off the UI's thread.
+func (a *app) pickFiles() []string {
+	win := a.tray.win
+	if win == nil {
+		return nil // not made yet, as in tests
+	}
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: win, Title: "添加图片或文件", ButtonLabel: "添加", Multiple: true})
+	if err != nil {
+		log.Printf("pick files: %v", err)
+	}
+	return paths
+}

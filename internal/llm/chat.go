@@ -3,6 +3,7 @@ package llm
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -33,10 +34,28 @@ type Call struct {
 	Input    json.RawMessage // a JSON object
 }
 
+// Image is a picture a user's message shows the model.
+type Image struct {
+	// Name is what whoever keeps the picture knows it by: it is saved with
+	// the message, and the Data is not, to be read again by it.
+	Name string `json:"name"`
+	// Type is the picture's media type, "image/jpeg" or "image/png".
+	Type string `json:"type"`
+	Data []byte `json:"-"`
+}
+
+// url is the picture as a data URL.
+func (i Image) url() string {
+	return "data:" + i.Type + ";base64," + base64.StdEncoding.EncodeToString(i.Data)
+}
+
 // Message is one turn of a conversation.
 type Message struct {
 	Role Role
 	Text string
+	// Images are the pictures a user's message comes with; one without
+	// Data is left out of what is sent.
+	Images []Image
 	// Calls are the tools an assistant's message asks for; each is to be
 	// answered by a Result message.
 	Calls []Call
@@ -53,6 +72,7 @@ type Message struct {
 type savedMessage struct {
 	Role   Role            `json:"role"`
 	Text   string          `json:"text,omitempty"`
+	Images []Image         `json:"images,omitempty"`
 	Calls  []Call          `json:"calls,omitempty"`
 	CallID string          `json:"callId,omitempty"`
 	Raw    json.RawMessage `json:"raw,omitempty"`
@@ -61,7 +81,7 @@ type savedMessage struct {
 
 // MarshalJSON writes a message to be saved and gone on with later.
 func (m Message) MarshalJSON() ([]byte, error) {
-	return json.Marshal(savedMessage{m.Role, m.Text, m.Calls, m.CallID, m.raw, m.kind})
+	return json.Marshal(savedMessage{m.Role, m.Text, m.Images, m.Calls, m.CallID, m.raw, m.kind})
 }
 
 // UnmarshalJSON reads a message MarshalJSON wrote.
@@ -70,7 +90,7 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &v); err != nil {
 		return err
 	}
-	*m = Message{Role: v.Role, Text: v.Text, Calls: v.Calls, CallID: v.CallID, raw: v.Raw, kind: v.Kind}
+	*m = Message{Role: v.Role, Text: v.Text, Images: v.Images, Calls: v.Calls, CallID: v.CallID, raw: v.Raw, kind: v.Kind}
 	return nil
 }
 
@@ -170,6 +190,24 @@ func object(input json.RawMessage) json.RawMessage {
 	return input
 }
 
+// said is the content of a user's message: its text alone when it has no
+// pictures to send, else the parts picture and text make of them.
+func said(m Message, picture func(Image) map[string]any, text func(string) map[string]any) any {
+	var parts []map[string]any
+	for _, i := range m.Images {
+		if len(i.Data) > 0 {
+			parts = append(parts, picture(i))
+		}
+	}
+	if len(parts) == 0 {
+		return m.Text
+	}
+	if m.Text != "" {
+		parts = append(parts, text(m.Text))
+	}
+	return parts
+}
+
 // Anthropic's Messages API.
 
 func anthropicRequest(c Config, r Request) map[string]any {
@@ -178,7 +216,12 @@ func anthropicRequest(c Config, r Request) map[string]any {
 	for _, m := range r.Messages {
 		switch m.Role {
 		case User:
-			messages, results = append(messages, map[string]any{"role": "user", "content": m.Text}), false
+			content := said(m, func(i Image) map[string]any {
+				return map[string]any{"type": "image", "source": map[string]any{
+					"type": "base64", "media_type": i.Type, "data": base64.StdEncoding.EncodeToString(i.Data),
+				}}
+			}, func(text string) map[string]any { return map[string]any{"type": "text", "text": text} })
+			messages, results = append(messages, map[string]any{"role": "user", "content": content}), false
 		case Assistant:
 			var content any = m.raw
 			if m.kind != Anthropic || len(m.raw) == 0 {
@@ -253,7 +296,9 @@ func chatRequest(c Config, r Request) map[string]any {
 	for _, m := range r.Messages {
 		switch m.Role {
 		case User:
-			messages = append(messages, map[string]any{"role": "user", "content": m.Text})
+			messages = append(messages, map[string]any{"role": "user", "content": said(m, func(i Image) map[string]any {
+				return map[string]any{"type": "image_url", "image_url": map[string]any{"url": i.url()}}
+			}, func(text string) map[string]any { return map[string]any{"type": "text", "text": text} })})
 		case Assistant:
 			msg := map[string]any{"role": "assistant", "content": m.Text}
 			if len(m.Calls) > 0 {
@@ -330,7 +375,9 @@ func responsesRequest(c Config, r Request) map[string]any {
 	for _, m := range r.Messages {
 		switch m.Role {
 		case User:
-			input = append(input, map[string]any{"role": "user", "content": m.Text})
+			input = append(input, map[string]any{"role": "user", "content": said(m, func(i Image) map[string]any {
+				return map[string]any{"type": "input_image", "image_url": i.url()}
+			}, func(text string) map[string]any { return map[string]any{"type": "input_text", "text": text} })})
 		case Assistant:
 			// What the service put out goes back as it was, item by item.
 			var items []json.RawMessage

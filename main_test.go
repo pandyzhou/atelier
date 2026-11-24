@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 
 	"github.com/pandyzhou/atelier/internal/features/home"
@@ -1013,6 +1016,20 @@ func TestScreenshot(t *testing.T) {
 	if os.Getenv("ATELIER_SCREENSHOT_SCALE") == "2" {
 		tt.SetScale(2)
 	}
+	// ATELIER_SCREENSHOT_ATTACH lists files to attach on the first page,
+	// separated by commas, and ATELIER_SCREENSHOT_SEND is a message to
+	// send with them.
+	if files, text := os.Getenv("ATELIER_SCREENSHOT_ATTACH"), os.Getenv("ATELIER_SCREENSHOT_SEND"); files != "" || text != "" {
+		click(t, tt, "首页")
+		first := a.current().(*home.Home)
+		if files != "" {
+			first.Attach(strings.Split(files, ",")...)
+		}
+		if text != "" {
+			first.Send(text)
+		}
+		tt.Frame()
+	}
 	if s := os.Getenv("ATELIER_SCREENSHOT_CLICK"); s != "" {
 		for _, label := range strings.Split(s, ",") {
 			if target, ok := strings.CutPrefix(label, "右键:"); ok {
@@ -1588,5 +1605,146 @@ func TestTitleBarButtons(t *testing.T) {
 	want := "minimize maximize unmaximize close"
 	if got := strings.Join(win.calls, " "); got != want {
 		t.Errorf("calls %q, want %q", got, want)
+	}
+}
+
+// TestAttachments walks through sending files to the assistant: chosen in
+// the system's dialog, dropped on the page and pasted; a picture goes to
+// the model as one and a file of text in the message's text; what cannot be
+// sent is said; the pictures are kept with the conversation, and go with it.
+func TestAttachments(t *testing.T) {
+	dir := t.TempDir()
+	a := newApp(store.Open(dir))
+	a.win = &fakeWindow{}
+	key, err := a.box.Seal("k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.settings.Models = []modelConfig{{ID: 1, Name: "P", Kind: string(llm.Chat), Key: key, Models: []string{"m"}}}
+	a.settings.Model, a.settings.ModelName = 1, "m"
+	var asked []llm.Request
+	a.complete = func(_ context.Context, _ llm.Config, r llm.Request, _ func(string)) (llm.Message, error) {
+		asked = append(asked, r)
+		return llm.Message{Role: llm.Assistant, Text: "看到了。"}, nil
+	}
+	files := t.TempDir()
+	var shot bytes.Buffer
+	if err := png.Encode(&shot, image.NewRGBA(image.Rect(0, 0, 60, 40))); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name string, data []byte) string {
+		path := filepath.Join(files, name)
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	photo, notes, program := write("照片.png", shot.Bytes()), write("笔记.txt", []byte("周三交报告")), write("程序.exe", []byte{0x4D, 0x5A, 0, 0xFF})
+
+	tt := ui.NewTester(a.view, 1280, 800)
+	h := a.current().(*home.Home)
+	// The button asks for files in the system's dialog.
+	h.PickFiles = func() []string { return []string{photo, notes} }
+	click(t, tt, "添加附件")
+	tt.Frame()
+	if !tt.HasText("照片.png") || !tt.HasText("笔记.txt") {
+		t.Fatalf("the files chosen do not show: %q", tt.Texts())
+	}
+	// One is taken out again; dropped on the page, it is back, and what is
+	// neither a picture nor text is said not to be.
+	click(t, tt, "移除附件：笔记.txt")
+	if tt.HasText("笔记.txt") {
+		t.Fatalf("the file taken out still shows: %q", tt.Texts())
+	}
+	if !tt.DropFiles(640, 300, notes, program) {
+		t.Fatal("the page does not take dropped files")
+	}
+	tt.Frame()
+	if !tt.HasText("笔记.txt") || !tt.HasText("“程序.exe”不是图片，也不是文本文件") {
+		t.Fatalf("after the drop: %q", tt.Texts())
+	}
+	saved := func() []string {
+		entries, _ := os.ReadDir(filepath.Join(dir, "home-files"))
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		return names
+	}
+	if len(saved()) != 0 {
+		t.Errorf("pictures are kept before they are sent: %q", saved())
+	}
+
+	click(t, tt, "给助手的话")
+	tt.Type("看看这些")
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if len(asked) != 1 {
+		t.Fatalf("asked %d times", len(asked))
+	}
+	first := asked[0].Messages[0]
+	if len(first.Images) != 1 || first.Images[0].Type != "image/png" || !bytes.Equal(first.Images[0].Data, shot.Bytes()) {
+		t.Errorf("the picture sent: %+v", first.Images)
+	}
+	if !strings.HasPrefix(first.Text, "看看这些") || !strings.Contains(first.Text, `<file name="笔记.txt">`) || !strings.Contains(first.Text, "周三交报告") {
+		t.Errorf("the text sent: %q", first.Text)
+	}
+	// The message shows its picture and its file, without the file's text,
+	// and the field is clear of them.
+	if !tt.HasText("图片：照片.png") || !tt.HasText("笔记.txt") || tt.HasText("周三交报告") || tt.HasText("移除附件") || tt.HasText("程序.exe") {
+		t.Errorf("the message shows as %q", tt.Texts())
+	}
+	if names := saved(); len(names) != 1 || names[0] != first.Images[0].Name {
+		t.Errorf("the pictures kept: %q, the one sent %q", names, first.Images[0].Name)
+	}
+
+	// A picture pasted is attached, and goes without a word.
+	tt.SetClipboardData(transfer.New(transfer.NewItem(transfer.Bytes(transfer.PNG, shot.Bytes()))))
+	click(t, tt, "给助手的话")
+	tt.Key(ui.Ctrl, ui.KeyV)
+	tt.Frame()
+	if !tt.HasText("移除附件：粘贴的图片") {
+		t.Fatalf("the pasted picture does not show: %q", tt.Texts())
+	}
+	click(t, tt, "发送")
+	tt.Frame()
+	if got := asked[len(asked)-1].Messages; len(asked) != 2 || len(got) != 3 || got[2].Text != "" || len(got[2].Images) != 1 || len(got[2].Images[0].Data) == 0 || len(got[0].Images[0].Data) == 0 {
+		t.Fatalf("after the paste, asked %d times with %+v", len(asked), got)
+	}
+	if len(saved()) != 2 {
+		t.Errorf("the pictures kept: %q", saved())
+	}
+	// No more files than a message takes.
+	many := make([]string, 12)
+	for i := range many {
+		many[i] = notes
+	}
+	h.Attach(many...)
+	tt.Frame()
+	if n := strings.Count(strings.Join(tt.Texts(), "|"), "移除附件：笔记.txt"); n != 8 || !tt.HasText("一次最多带 8 个附件") {
+		t.Errorf("%d of 12 files attached: %q", n, tt.Texts())
+	}
+
+	// After a restart the conversation has its pictures still, to show and
+	// to send; deleting it deletes them.
+	b := newApp(store.Open(dir))
+	b.win = &fakeWindow{}
+	b.complete, b.settings = a.complete, a.settings
+	tb := ui.NewTester(b.view, 1280, 800)
+	click(t, tb, "历史对话", "打开对话：看看这些")
+	tb.Frame()
+	if !tb.HasText("图片：照片.png") || !tb.HasText("图片：粘贴的图片") {
+		t.Fatalf("the conversation opened again shows %q", tb.Texts())
+	}
+	click(t, tb, "给助手的话")
+	tb.Type("再看一眼")
+	tb.Key(0, ui.KeyEnter)
+	tb.Frame()
+	if got := asked[len(asked)-1].Messages; len(asked) != 3 || !bytes.Equal(got[0].Images[0].Data, shot.Bytes()) {
+		t.Fatalf("after the restart, asked %d times with %+v", len(asked), got[0].Images)
+	}
+	click(t, tb, "删除对话：看看这些")
+	if len(saved()) != 0 {
+		t.Errorf("the pictures of a deleted conversation are kept: %q", saved())
 	}
 }

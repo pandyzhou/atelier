@@ -38,6 +38,7 @@ func (a *app) makeFeatures(s *store.Store) []feature.Feature {
 			},
 			Background: a.background,
 			OnUI:       a.onUI,
+			PickFiles:  a.pickFiles,
 			OpenSettings: func() {
 				if a.selected != settingsID {
 					a.before = a.selected

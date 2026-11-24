@@ -48,6 +48,9 @@ type Options struct {
 	OnUI func(fn func())
 	// OpenSettings shows the models' settings.
 	OpenSettings func()
+	// PickFiles has the user choose files to attach, off the UI's thread,
+	// and returns their paths: none when they chose none.
+	PickFiles func() []string
 }
 
 // Home is the feature.
@@ -59,6 +62,8 @@ type Home struct {
 	table *timetable.Timetable
 	now   func() time.Time
 	ui    viewState
+	// blobs are the pictures kept for this run, where nothing is saved.
+	blobs map[string][]byte
 }
 
 // The kinds of entry a conversation shows.
@@ -73,6 +78,8 @@ const (
 type entry struct {
 	Kind int    `json:"kind"`
 	Text string `json:"text"`
+	// Files are what the user's message came with.
+	Files []attached `json:"files,omitempty"`
 }
 
 // conversation is a conversation that was had, as it is saved.
@@ -88,6 +95,7 @@ type conversation struct {
 // data is what is saved: the conversations, the newest first.
 type data struct {
 	Next          int             `json:"next"`
+	NextFile      int             `json:"nextFile,omitempty"` // counts the pictures kept, to name them
 	Conversations []*conversation `json:"conversations"`
 }
 
@@ -111,15 +119,31 @@ func (h *Home) Title() string { return "首页" }
 // user's: once, and again after each round of tools it calls.
 const maxSteps = 6
 
-// Send takes a message of the user's to the model, and its answer, and what
-// it had done, into the conversation.
+// Send takes a message of the user's to the model, with the files attached
+// to it, and its answer, and what it had done, into the conversation.
 func (h *Home) Send(text string) {
 	text = strings.TrimSpace(text)
-	if text == "" || h.ui.busy {
+	if (text == "" && len(h.ui.pending) == 0) || h.ui.busy {
 		return
 	}
-	h.ui.entries = append(h.ui.entries, entry{said, text})
-	h.ui.history = append(h.ui.history, llm.Message{Role: llm.User, Text: text})
+	// A picture goes as one; a file of text, in the text the model is sent.
+	e, m := entry{Kind: said, Text: text}, llm.Message{Role: llm.User}
+	var b strings.Builder
+	b.WriteString(text)
+	for _, p := range h.ui.pending {
+		if p.Type == "" {
+			e.Files = append(e.Files, attached{Name: p.Name})
+			fmt.Fprintf(&b, "\n\n<file name=%q>\n%s\n</file>", p.Name, p.Text)
+			continue
+		}
+		name := h.keepFile(p)
+		e.Files = append(e.Files, attached{Name: p.Name, Image: name})
+		m.Images = append(m.Images, llm.Image{Name: name, Type: p.Type})
+	}
+	m.Text = strings.TrimSpace(b.String())
+	h.ui.pending, h.ui.note = nil, ""
+	h.ui.entries = append(h.ui.entries, e)
+	h.ui.history = append(h.ui.history, m)
 	h.ask()
 }
 
@@ -157,7 +181,7 @@ func (h *Home) Stop() {
 
 // fail ends the turn with what went wrong.
 func (h *Home) fail(message string) {
-	h.ui.entries = append(h.ui.entries, entry{problem, message})
+	h.ui.entries = append(h.ui.entries, entry{Kind: problem, Text: message})
 	h.done()
 }
 
@@ -225,13 +249,20 @@ func (h *Home) keep() {
 	}
 	if k == nil {
 		h.data.Next++
-		k = &conversation{ID: h.data.Next, Title: title(h.ui.entries[0].Text)}
+		first := h.ui.entries[0]
+		if first.Text == "" && len(first.Files) > 0 {
+			first.Text = first.Files[0].Name
+		}
+		k = &conversation{ID: h.data.Next, Title: title(first.Text)}
 		h.ui.id = k.ID
 	}
 	k.Updated = h.now().Format(time.RFC3339)
 	k.Entries, k.History = slices.Clone(h.ui.entries), slices.Clone(h.ui.history)
 	h.data.Conversations = slices.Insert(h.data.Conversations, 0, k)
 	if len(h.data.Conversations) > kept {
+		for _, old := range h.data.Conversations[kept:] {
+			h.forget(old)
+		}
 		h.data.Conversations = h.data.Conversations[:kept]
 	}
 	h.save()
@@ -280,7 +311,12 @@ func (h *Home) Delete(id int) {
 	if h.ui.id == id {
 		h.Reset()
 	}
-	h.data.Conversations = slices.DeleteFunc(h.data.Conversations, func(k *conversation) bool { return k.ID == id })
+	h.data.Conversations = slices.DeleteFunc(h.data.Conversations, func(k *conversation) bool {
+		if k.ID == id {
+			h.forget(k)
+		}
+		return k.ID == id
+	})
 	h.save()
 }
 
@@ -292,7 +328,7 @@ func (h *Home) step(n int) {
 		h.fail("还没有可用的模型，请先到设置里添加。")
 		return
 	}
-	req := llm.Request{System: h.system(), Messages: slices.Clone(h.ui.history), Tools: tools}
+	req := llm.Request{System: h.system(), Messages: h.pictures(h.ui.history), Tools: tools}
 	run := h.ui.run
 	h.ui.growing = -1
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -339,7 +375,7 @@ func (h *Home) step(n int) {
 			} else if g := h.ui.growing; g >= 0 && g < len(h.ui.entries) {
 				h.ui.entries[g].Text = text
 			} else {
-				h.ui.entries = append(h.ui.entries, entry{answer, text})
+				h.ui.entries = append(h.ui.entries, entry{Kind: answer, Text: text})
 			}
 			h.ui.growing = -1
 			if len(msg.Calls) == 0 {
@@ -367,7 +403,7 @@ func (h *Home) grow(text string) {
 	if g := h.ui.growing; g >= 0 && g < len(h.ui.entries) {
 		h.ui.entries[g].Text += text
 	} else {
-		h.ui.entries = append(h.ui.entries, entry{answer, text})
+		h.ui.entries = append(h.ui.entries, entry{Kind: answer, Text: text})
 		h.ui.growing = len(h.ui.entries) - 1
 	}
 	h.ui.follow = true
@@ -437,7 +473,7 @@ func schema(required []string, properties map[string]any) map[string]any {
 // call does what the model called for and returns what to tell it, noting
 // in the conversation what was done for the user.
 func (h *Home) call(c llm.Call) string {
-	did := func(text string) { h.ui.entries = append(h.ui.entries, entry{action, text}) }
+	did := func(text string) { h.ui.entries = append(h.ui.entries, entry{Kind: action, Text: text}) }
 	switch c.Name {
 	case "add_task":
 		var in struct {
@@ -671,6 +707,7 @@ func (h *Home) system() string {
 - 添加成功后用一句话确认。工具说失败时，把原因告诉用户。
 - 任务可以修改、标为完成和删除，用任务前面方括号里的 id 指明是哪一条；回答用户时不要提 id。
 - 删除不能恢复：只在用户明确说要删时才删，指不清是哪一条、或者一次要删好几条时，先列出来问清楚。
+- 用户附上图片或文件时，按里面的内容回答。要据此添加好几条任务或课程时，先把读到的列出来让用户确认，再添加。
 - 课表里的课程只能查看和添加。用户要修改或删除课程时，请他到“课表”页面操作。
 `)
 	periods := h.table.Periods()

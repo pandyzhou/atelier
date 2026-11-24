@@ -409,3 +409,50 @@ func TestStream(t *testing.T) {
 		t.Errorf("no error for an empty stream")
 	}
 }
+
+// TestImages checks that a user's pictures go to each kind of service in
+// the shape it reads, that they are saved by name without their data, and
+// that one whose data is gone is left out.
+func TestImages(t *testing.T) {
+	msg := Message{Role: User, Text: "这是什么", Images: []Image{{Name: "1.png", Type: "image/png", Data: []byte("abc")}}}
+	for _, c := range []struct {
+		kind  Kind
+		done  string
+		wants []string
+	}{
+		{Anthropic, `{"content":[{"type":"text","text":"图"}]}`,
+			[]string{`{"source":{"data":"YWJj","media_type":"image/png","type":"base64"},"type":"image"}`, `{"text":"这是什么","type":"text"}`}},
+		{Chat, `{"choices":[{"message":{"role":"assistant","content":"图"}}]}`,
+			[]string{`{"image_url":{"url":"data:image/png;base64,YWJj"},"type":"image_url"}`, `{"text":"这是什么","type":"text"}`}},
+		{Responses, `{"output":[{"type":"message","content":[{"type":"output_text","text":"图"}]}]}`,
+			[]string{`{"image_url":"data:image/png;base64,YWJj","type":"input_image"}`, `{"text":"这是什么","type":"input_text"}`}},
+	} {
+		s := newService(t, 200, c.done)
+		cfg := Config{Kind: c.kind, BaseURL: s.URL, Key: "k", Model: "m"}
+		if _, err := Complete(ctx(t), cfg, Request{Messages: []Message{msg}}); err != nil {
+			t.Fatalf("%s: %v", c.kind, err)
+		}
+		sent, _ := json.Marshal(s.body)
+		for _, want := range c.wants {
+			if !strings.Contains(string(sent), want) {
+				t.Errorf("%s: the request lacks %s: %s", c.kind, want, sent)
+			}
+		}
+		// Saved, the picture is its name and type; read again it has no
+		// data, and the message goes as its text alone.
+		saved, err := json.Marshal(msg)
+		if err != nil || strings.Contains(string(saved), "YWJj") || !strings.Contains(string(saved), `"1.png"`) {
+			t.Fatalf("saved as %s, %v", saved, err)
+		}
+		var back Message
+		if err := json.Unmarshal(saved, &back); err != nil || len(back.Images) != 1 || back.Images[0].Type != "image/png" {
+			t.Fatalf("read back %+v, %v", back, err)
+		}
+		if _, err := Complete(ctx(t), cfg, Request{Messages: []Message{back}}); err != nil {
+			t.Fatalf("%s: %v", c.kind, err)
+		}
+		if sent, _ = json.Marshal(s.body); !strings.Contains(string(sent), `"content":"这是什么"`) {
+			t.Errorf("%s: without the picture's data the request is %s", c.kind, sent)
+		}
+	}
+}
