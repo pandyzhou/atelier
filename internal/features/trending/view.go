@@ -15,6 +15,11 @@ type viewState struct {
 	loading bool      // the list is being read
 	problem string    // why the last reading failed, "" if it did not
 	tried   time.Time // when a reading was last begun
+	// open is the repository whose page shows, "" for the list; readmes
+	// are the READMEs read, by repository, and doc what shows one.
+	open    string
+	readmes map[string]*readme
+	doc     mallow.Document
 }
 
 // View builds the page: one card, a heading over the list. It reads the
@@ -25,6 +30,10 @@ func (t *Trending) View(c *ui.Context) {
 	}
 	ui.Row(c).Fill().Padding(0, 28, 0, 16).AlignItems(ui.Stretch).Children(func() {
 		mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0).Gap(12).Padding(24, 4, 0, 4).Children(func() {
+			if r, ok := t.opened(); ok {
+				t.page(c, r)
+				return
+			}
 			ui.Column(c).PaddingX(28).Children(func() { t.heading(c) })
 			t.list(c)
 		})
@@ -65,8 +74,7 @@ func (t *Trending) when(at time.Time) string {
 	return fmt.Sprintf("%d月%d日 %s", int(at.Month()), at.Day(), at.Format("15:04"))
 }
 
-// list is the repositories, in the page's order: a click opens one in the
-// browser.
+// list is the repositories, in the page's order: a click opens one's page.
 func (t *Trending) list(c *ui.Context) {
 	if len(t.data.Repos) == 0 {
 		note := "这里会列出 GitHub 这一周最受关注的仓库。"
@@ -104,20 +112,97 @@ func (t *Trending) row(c *ui.Context, place int, r Repo) {
 			if r.Description != "" {
 				ui.Text(c, r.Description).FontSize(13).TextColor(mallow.Text).MaxLines(2)
 			}
-			ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
-				if r.Language != "" {
-					ui.Text(c, r.Language).FontSize(12).TextColor(mallow.Muted).SingleLine()
-				}
-				ui.Text(c, "★ "+grouped(r.Stars)).FontSize(12).TextColor(mallow.Muted).SingleLine()
-				if r.Gained > 0 {
-					ui.Text(c, "本周 +"+grouped(r.Gained)).FontSize(12).FontWeight(500).TextColor(mallow.Accent).SingleLine()
-				}
-			})
+			facts(c, r, false)
 		})
 	})
 	if b.Clicked() {
-		c.Services().OpenURL(r.URL())
+		t.Open(r.Name)
 	}
+}
+
+// facts is a repository's language, its stars, its forks, and how many of
+// its stars are this week's, on a line.
+func facts(c *ui.Context, r Repo, forks bool) {
+	ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
+		if r.Language != "" {
+			ui.Text(c, r.Language).FontSize(12).TextColor(mallow.Muted).SingleLine()
+		}
+		ui.Text(c, "★ "+grouped(r.Stars)).FontSize(12).TextColor(mallow.Muted).SingleLine()
+		if forks {
+			ui.Text(c, "复刻 "+grouped(r.Forks)).FontSize(12).TextColor(mallow.Muted).SingleLine()
+		}
+		if r.Gained > 0 {
+			ui.Text(c, "本周 +"+grouped(r.Gained)).FontSize(12).FontWeight(500).TextColor(mallow.Accent).SingleLine()
+		}
+	})
+}
+
+// page is a repository's own page: the way back, what the list says of
+// it, the button that opens it in the browser, and its README.
+func (t *Trending) page(c *ui.Context, r Repo) {
+	owner, name, _ := strings.Cut(r.Name, "/")
+	services := c.Services()
+	ui.Row(c).Shrink(0).Padding(0, 28, 0, 24).Gap(14).AlignItems(ui.Start).Children(func() {
+		if mallow.IconButton(c, "返回热门", mallow.GlyphChevronLeft, mallow.IconButtonStyle{Size: 36}).Clicked() {
+			t.Close()
+		}
+		ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
+			ui.Row(c).Gap(6).AlignItems(ui.Baseline).Children(func() {
+				ui.Text(c, owner+" /").FontSize(18).TextColor(mallow.Muted).SingleLine().Shrink(1).MinWidth(0)
+				ui.Text(c, name).FontSize(22).FontWeight(600).TextColor(mallow.Text).SingleLine().Shrink(1).MinWidth(0)
+			})
+			if r.Description != "" {
+				ui.Text(c, r.Description).FontSize(13).TextColor(mallow.Text).MaxLines(3)
+			}
+			facts(c, r, true)
+		})
+		if mallow.Button(c, "在浏览器中打开").Clicked() {
+			services.OpenURL(r.URL())
+		}
+	})
+	mallow.Groove(c).Margin(0, 24)
+	about := t.ui.readmes[r.Name]
+	word := ""
+	switch {
+	case about == nil:
+		word = "这里读不了 README。"
+	case about.loading:
+		word = "正在读取 README…"
+	case about.problem != "":
+		word = about.problem
+	case about.missing:
+		word = "这个仓库没有 README。"
+	}
+	if word != "" {
+		ui.Column(c).Grow(1).Justify(ui.Center).AlignItems(ui.Center).Gap(12).Padding(0, 28, 48, 28).Children(func() {
+			ui.Text(c, word).FontSize(14).TextColor(mallow.Muted)
+			if about != nil && about.problem != "" && mallow.Button(c, "再试一次").Clicked() {
+				t.Open(r.Name)
+			}
+		})
+		return
+	}
+	// Its pictures are loaded from where the repository's files are, and
+	// its links go to the browser: to the repository's pages on GitHub
+	// when they are written as paths within it.
+	file := about.file
+	t.ui.doc.LoadImage = func(address string) (ui.ImageSource, error) { return t.loadPicture(r.Name, file, address) }
+	t.ui.doc.OnLink = func(address string) {
+		if strings.HasPrefix(address, "#") {
+			return
+		}
+		if to := resolve("https://github.com/", r.Name+"/blob/HEAD", file, address); ui.SafeToOpen(to) {
+			services.OpenURL(to)
+		}
+	}
+	// The room at its right is the scroll bar's.
+	ui.Scroll(c.Key("readme:"+r.Name)).Label("README").Grow(1).MinHeight(0).Padding(4, 24, 24, 28).Children(func() {
+		ui.Row(c).Justify(ui.Center).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).MaxWidth(860).Children(func() {
+				t.ui.doc.View(c, about.text)
+			})
+		})
+	})
 }
 
 // grouped writes a count with its thousands apart, as 14,814.

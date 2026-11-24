@@ -37,9 +37,10 @@ func (r Repo) URL() string { return "https://github.com/" + r.Name }
 
 // Options are what the page needs of the app around it.
 type Options struct {
-	// Fetch returns the HTML of Page: Get, but in tests. Without it the
-	// list is not read anew.
-	Fetch func(ctx context.Context) ([]byte, error)
+	// Fetch returns what is at an address of GitHub's, and ErrNotFound for
+	// one there is nothing at: Get, but in tests. Without it nothing is
+	// read anew.
+	Fetch func(ctx context.Context, url string) ([]byte, error)
 	// Background runs work off the UI's thread, then what it returns on it.
 	Background func(work func() func())
 }
@@ -112,7 +113,7 @@ func (t *Trending) Refresh() {
 	t.Background(func() func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		page, err := t.Fetch(ctx)
+		page, err := t.Fetch(ctx, Page)
 		var repos []Repo
 		if err == nil {
 			if repos = Parse(page); len(repos) == 0 {
@@ -133,28 +134,32 @@ func (t *Trending) Refresh() {
 	})
 }
 
-// Get reads Page from GitHub: as any browser without an account would.
-func Get(ctx context.Context) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, Page, nil)
+// Get reads what is at an address, as any browser without an account
+// would: GitHub's page of trending repositories, a file of a repository, a
+// picture of its README.
+func Get(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	// The page is not served to a client that does not say what it is.
+	// GitHub's pages are not served to a client that does not say what it is.
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; desktop-app)")
-	req.Header.Set("Accept", "text/html")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, errors.New("连不上 GitHub，检查一下网络")
+		return nil, errors.New("连不上，检查一下网络")
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub 回了 %d", resp.StatusCode)
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return nil, ErrNotFound
+	case resp.StatusCode != http.StatusOK:
+		return nil, fmt.Errorf("对方回了 %d", resp.StatusCode)
 	}
-	page, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxPicture+1))
 	if err != nil {
-		return nil, errors.New("读 GitHub 的页面时断了")
+		return nil, errors.New("读到一半断了")
 	}
-	return page, nil
+	return data, nil
 }
 
 // What is read of a repository's part of the page.

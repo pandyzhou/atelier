@@ -58,3 +58,43 @@ func TestParse(t *testing.T) {
 		t.Errorf("counts are written %q", got)
 	}
 }
+
+// TestTidy checks that the HTML a README is written with becomes Markdown,
+// or goes, and that code is left as it is written.
+func TestTidy(t *testing.T) {
+	src := "<!-- banner -->\n<h1 align=\"center\">\n  <img src=\"docs/logo dark.png\" alt=\"Logo\" width=\"120\"><br>\n  Tiny\n</h1>\n\n" +
+		"<p align=\"center\">\n    <a href=\"https://example.com/ci\"><img src='https://img.example.com/ci.svg' alt=\"CI\"></a>\n    <a href=\"docs/guide.md\">Read the <b>guide</b></a>\n</p>\n\n" +
+		"Use `Map<K, V>` and <kbd>Ctrl</kbd>, not <span style=\"color:red\">this</span>.\n\n" +
+		"```html\n<p align=\"center\"><img src=\"x.png\"></p>\n```\n\n" +
+		"<details><summary>More</summary>\n\n- one\n\n</details>\n"
+	want := "# ![Logo](docs/logo%20dark.png#shown-at=120x0) Tiny\n\n" +
+		"[![CI](https://img.example.com/ci.svg)](https://example.com/ci)\n[Read the **guide**](docs/guide.md)\n\n" +
+		"Use `Map<K, V>` and `Ctrl`, not this.\n\n" +
+		"```html\n<p align=\"center\"><img src=\"x.png\"></p>\n```\n\n" +
+		"More\n\n- one"
+	if got := Tidy(src); got != want {
+		t.Errorf("tidied to:\n%s\n\nwant:\n%s", got, want)
+	}
+}
+
+// TestAddresses checks where the pictures and the links of a README go:
+// relative to where the README is, pictures to the repository's files and
+// links to its pages.
+func TestAddresses(t *testing.T) {
+	for _, c := range []struct{ file, address, picture, link string }{
+		{"README.md", "docs/a.png", "https://raw.githubusercontent.com/o/r/HEAD/docs/a.png", "https://github.com/o/r/blob/HEAD/docs/a.png"},
+		{"docs/README.md", "../img/a.png?raw=true", "https://raw.githubusercontent.com/o/r/HEAD/img/a.png?raw=true", "https://github.com/o/r/blob/HEAD/img/a.png?raw=true"},
+		{"docs/README.md", "/LICENSE", "https://raw.githubusercontent.com/o/r/HEAD/LICENSE", "https://github.com/o/r/blob/HEAD/LICENSE"},
+		{"README.md", "https://github.com/o/r/blob/main/shot.png", "https://raw.githubusercontent.com/o/r/main/shot.png", "https://github.com/o/r/blob/main/shot.png"},
+		{"README.md", "https://github.com/o/r/raw/main/shot.png?raw=true", "https://raw.githubusercontent.com/o/r/main/shot.png", "https://github.com/o/r/raw/main/shot.png?raw=true"},
+		{"README.md", "//cdn.example.com/a.png", "https://cdn.example.com/a.png", "https://cdn.example.com/a.png"},
+		{"README.md", "https://example.com/a.png", "https://example.com/a.png", "https://example.com/a.png"},
+	} {
+		if got := picture("o/r", c.file, c.address); got != c.picture {
+			t.Errorf("the picture %q of %s is loaded from %q", c.address, c.file, got)
+		}
+		if got := resolve("https://github.com/", "o/r/blob/HEAD", c.file, c.address); got != c.link {
+			t.Errorf("the link %q of %s goes to %q", c.address, c.file, got)
+		}
+	}
+}

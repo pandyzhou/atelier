@@ -1173,7 +1173,20 @@ func TestScreenshot(t *testing.T) {
 	if path := os.Getenv("ATELIER_SCREENSHOT_TRENDING"); path != "" {
 		for _, f := range a.features {
 			if tr, ok := f.(*trending.Trending); ok {
-				tr.Fetch = func(context.Context) ([]byte, error) { return os.ReadFile(path) }
+				// ATELIER_SCREENSHOT_README is a README for whichever of
+				// them is opened.
+				tr.Fetch = func(ctx context.Context, url string) ([]byte, error) {
+					switch readme := os.Getenv("ATELIER_SCREENSHOT_README"); {
+					case url == trending.Page:
+						return os.ReadFile(path)
+					case readme != "" && strings.HasSuffix(url, "/HEAD/README.md"):
+						return os.ReadFile(readme)
+					case os.Getenv("ATELIER_SCREENSHOT_NET") != "":
+						// The README's pictures, from where they are.
+						return trending.Get(ctx, url)
+					}
+					return nil, trending.ErrNotFound
+				}
 			}
 		}
 	}
@@ -1213,6 +1226,14 @@ func TestScreenshot(t *testing.T) {
 	// ATELIER_SCREENSHOT_RIGHTCLICK opens the context menu of a label.
 	if s := os.Getenv("ATELIER_SCREENSHOT_RIGHTCLICK"); s != "" {
 		rightClick(t, tt, s)
+	}
+	// ATELIER_SCREENSHOT_NET lets pictures load from the network, which
+	// takes a while.
+	if os.Getenv("ATELIER_SCREENSHOT_NET") != "" {
+		for range 8 {
+			time.Sleep(time.Second)
+			tt.Frame()
+		}
 	}
 	// Let the 200 ms transitions finish before taking the picture.
 	tt.Advance(time.Second)
@@ -2162,11 +2183,23 @@ func TestTrending(t *testing.T) {
 	}
 	click(t, tt, "待办")
 	fetches, fail := 0, false
-	tr.Fetch = func(context.Context) ([]byte, error) {
-		fetches++
-		if fail {
+	var asked []string // the addresses read besides the list's
+	tr.Fetch = func(_ context.Context, url string) ([]byte, error) {
+		switch {
+		case url != trending.Page:
+			asked = append(asked, url)
+			if fail {
+				return nil, errors.New("连不上，检查一下网络")
+			}
+			if url == "https://raw.githubusercontent.com/solo/tiny/HEAD/readme.md" {
+				return []byte("<h1 align=\"center\">Tiny</h1>\n\n<p align=\"center\"><img src=\"docs/logo.png\" alt=\"标志\"></p>\n\n小而快，见 [用法](docs/usage.md)。\n"), nil
+			}
+			return nil, trending.ErrNotFound
+		case fail:
+			fetches++
 			return nil, errors.New("连不上 GitHub，检查一下网络")
 		}
+		fetches++
 		return []byte(page), nil
 	}
 	click(t, tt, "热门")
@@ -2184,9 +2217,43 @@ func TestTrending(t *testing.T) {
 	if fetches != 1 {
 		t.Errorf("a list just read is read again: %d times", fetches)
 	}
+	// A click opens the repository's own page, with its README, read from
+	// where the repository's files are and shown without its HTML; its
+	// links and the button go to the browser, and the way back to the list.
 	click(t, tt, "打开 solo/tiny")
-	if got := tt.OpenedURLs(); len(got) != 1 || got[0] != "https://github.com/solo/tiny" {
-		t.Errorf("a click opens %q", got)
+	tt.Frame()
+	if want := []string{"https://raw.githubusercontent.com/solo/tiny/HEAD/README.md", "https://raw.githubusercontent.com/solo/tiny/HEAD/readme.md"}; !slices.Equal(asked[:min(len(asked), 2)], want) {
+		t.Fatalf("the README is looked for at %q", asked)
+	}
+	if !tt.HasText("Tiny") || !tt.HasText("小而快，见") || tt.HasText("align") || tt.HasText("rocket") || !tt.HasText("复刻 12") {
+		t.Fatalf("the repository's page: %q", tt.Texts())
+	}
+	// Its picture is asked for where the file is.
+	if !slices.Contains(asked, "https://raw.githubusercontent.com/solo/tiny/HEAD/docs/logo.png") {
+		t.Errorf("the README's picture is not loaded from the repository: %q", asked)
+	}
+	click(t, tt, "用法")
+	click(t, tt, "在浏览器中打开")
+	if got := tt.OpenedURLs(); !slices.Equal(got, []string{"https://github.com/solo/tiny/blob/HEAD/docs/usage.md", "https://github.com/solo/tiny"}) {
+		t.Errorf("the links open %q", got)
+	}
+	// Opened again, it is not read again.
+	n := len(asked)
+	click(t, tt, "返回热门", "打开 solo/tiny")
+	tt.Frame()
+	if len(asked) != n || !tt.HasText("小而快，见") {
+		t.Errorf("a README read is read again: %q", asked[n:])
+	}
+	// One without a README says so; one that cannot be read, why, and can
+	// be tried again.
+	click(t, tt, "返回热门", "打开 acme/rocket")
+	tt.Frame()
+	if !tt.HasText("这个仓库没有 README。") {
+		t.Errorf("a repository without a README: %q", tt.Texts())
+	}
+	click(t, tt, "返回热门")
+	if !tt.HasText("GitHub 每周热门") || !tt.HasText("solo /") {
+		t.Fatalf("after going back: %q", tt.Texts())
 	}
 	// The button reads it anew; when that fails the list stays.
 	fail = true
