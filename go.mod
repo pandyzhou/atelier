@@ -6,7 +6,7 @@ tool github.com/egoist/mygo/cmd/mygo
 
 require (
 	github.com/egoist/mygo v0.10.0
-	github.com/pandyzhou/mallow v0.1.27
+	github.com/pandyzhou/mallow v0.1.28
 	golang.org/x/image v0.46.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/text v0.43.0

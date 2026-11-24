@@ -79,15 +79,17 @@ func (h *Home) View(c *ui.Context) {
 	})
 }
 
-// bar is the row of buttons over the page: a new conversation, once there
-// is one, and the panel of those saved.
+// bar is the row over the page: at the left the model asked, to choose
+// another; at the right a new conversation, once there is one, and the
+// panel of those saved.
 func (h *Home) bar(c *ui.Context) {
-	ui.Row(c).Shrink(0).Gap(12).Justify(ui.End).AlignItems(ui.Center).Children(func() {
-		if len(h.ui.entries) > 0 && mallow.Button(c, "新对话").Clicked() {
+	ui.Row(c).Shrink(0).Gap(12).AlignItems(ui.Center).Children(func() {
+		h.picker(c)
+		ui.Box(c).Grow(1)
+		if len(h.ui.entries) > 0 && mallow.IconButton(c, "新对话", mallow.GlyphCompose, mallow.IconButtonStyle{Size: 36}).Clicked() {
 			h.Reset()
 		}
 		button := mallow.IconButton(c, "历史对话", mallow.GlyphHistory, mallow.IconButtonStyle{Size: 36, Active: h.ui.panel})
-		mallow.Tooltip(c, button, "历史对话")
 		if button.Clicked() {
 			h.ui.panel = !h.ui.panel
 		}
@@ -105,14 +107,16 @@ func (h *Home) saved(c *ui.Context) {
 		}
 		open, drop := 0, 0
 		ui.Scroll(c).Label("历史对话列表").Grow(1).MinHeight(0).Gap(2).Children(func() {
+			group := ""
 			for _, k := range h.data.Conversations {
+				if g := h.when(k.Updated); g != group {
+					group = g
+					ui.Text(c.Key("group:"+g), g).FontSize(11).TextColor(mallow.Muted).Padding(10, 8, 4, 8)
+				}
 				mallow.ListRow(c.Key(k.ID), k.ID == h.ui.id).Children(func() {
-					body := mallow.Plain(c, "打开对话："+k.Title).Grow(1).MinWidth(0).Padding(6, 6)
+					body := mallow.Plain(c, "打开对话："+k.Title).Grow(1).MinWidth(0).Padding(8, 6)
 					body.Children(func() {
-						ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-							ui.Text(c, k.Title).FontSize(13).TextColor(mallow.Text).SingleLine()
-							ui.Text(c, h.when(k.Updated)).FontSize(11).TextColor(mallow.Muted).SingleLine()
-						})
+						ui.Text(c, k.Title).Grow(1).MinWidth(0).FontSize(13).TextColor(mallow.Text).SingleLine()
 					})
 					if body.Clicked() {
 						open = k.ID
@@ -132,17 +136,26 @@ func (h *Home) saved(c *ui.Context) {
 	})
 }
 
-// when writes the time a conversation last went on: the time of day if
-// that was today, else the day.
+// when names how long ago a conversation last went on, as what those of
+// about then are listed under.
 func (h *Home) when(updated string) string {
 	t, err := time.Parse(time.RFC3339, updated)
 	if err != nil {
-		return ""
+		return "更早"
 	}
-	if t.Format(dateLayout) == h.now().Format(dateLayout) {
-		return "今天 " + t.Format("15:04")
+	now := h.now()
+	day := func(t time.Time) time.Time { return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC) }
+	switch days := int(day(now).Sub(day(t.In(now.Location()))).Hours() / 24); {
+	case days <= 0:
+		return "今天"
+	case days == 1:
+		return "昨天"
+	case days <= 7:
+		return "近 7 天"
+	case days <= 30:
+		return "近 30 天"
 	}
-	return fmt.Sprintf("%d月%d日", int(t.Month()), t.Day())
+	return "更早"
 }
 
 // start is the page before anything is said.
@@ -152,7 +165,6 @@ func (h *Home) start(c *ui.Context) {
 		centered(c, 20, func() {
 			ui.Column(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "今天想安排点什么？").FontSize(28).FontWeight(600).TextColor(mallow.Text)
-				ui.Text(c, "问问哪天有什么安排，或者让我添加任务和课程。").FontSize(14).TextColor(mallow.Muted)
 			})
 			h.field(c, ok)
 			if !ok {
@@ -164,9 +176,14 @@ func (h *Home) start(c *ui.Context) {
 				})
 				return
 			}
-			ui.Row(c).Gap(10).Wrap().Justify(ui.Center).Children(func() {
+			ui.Column(c).Gap(2).PaddingX(8).Children(func() {
+				ui.Text(c, "试试这样问").FontSize(12).TextColor(mallow.Muted).Padding(0, 8, 4, 8)
 				for _, s := range suggestions {
-					if mallow.Chip(c, s, false).Clicked() {
+					item := mallow.Plain(c.Key(s), s).Padding(8, 8)
+					item.Children(func() {
+						ui.Text(c, s).Grow(1).MinWidth(0).FontSize(14).TextColor(mallow.Text).SingleLine()
+					})
+					if item.Clicked() {
 						h.Send(s)
 					}
 				}
@@ -185,15 +202,14 @@ func centered(c *ui.Context, gap float32, body func()) {
 
 // field is where the user writes to the assistant, in a tray: Enter sends,
 // Shift and Enter starts a new line. Over what is written, the files that
-// go with it; under it, the button that attaches them, the model asked,
-// to choose another, and the button that sends, or stops the answer that
-// is coming.
+// go with it; under it, the button that attaches them at the left, and at
+// the right the one that sends, or stops the answer that is coming.
 func (h *Home) field(c *ui.Context, usable bool) {
 	can := func() bool { return usable && !h.ui.busy }
 	services := c.Services()
-	mallow.Tray(c, mallow.Small).Padding(10, 12, 8, 14).Gap(6).Children(func() {
+	mallow.Tray(c, mallow.Small).Padding(12, 12, 10, 16).Gap(8).Children(func() {
 		h.attachments(c)
-		in := ui.TextAreaBase(c, &h.ui.draft).Lines(1, 6).MinHeight(0).Placeholder("问日程，或者说要添加什么").Label("给助手的话").
+		in := ui.TextAreaBase(c, &h.ui.draft).Lines(1, 6).MinHeight(0).Placeholder("问日程，或者让我添加、修改任务").Label("给助手的话").
 			FontSize(14).TextColor(mallow.Text).PlaceholderColor(mallow.Muted).FocusRing(false).Padding(4, 0).AutoFocus()
 		in.OnTextKey(func(k ui.TextKey) bool {
 			if k.Key != ui.KeyEnter || k.Mods != 0 {
@@ -222,9 +238,9 @@ func (h *Home) field(c *ui.Context, usable bool) {
 			}
 			return false
 		})
-		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Margin(0, 0, 0, -6).Children(func() {
 			if h.PickFiles != nil {
-				attach := mallow.GhostIconButton(c, "添加附件", mallow.GlyphAttach, mallow.IconButtonStyle{})
+				attach := mallow.GhostIconButton(c, "添加附件", mallow.GlyphPlus, mallow.IconButtonStyle{Size: 30})
 				mallow.Tooltip(c, attach, "添加图片或文件")
 				if attach.Clicked() {
 					h.Background(func() func() {
@@ -233,13 +249,12 @@ func (h *Home) field(c *ui.Context, usable bool) {
 					})
 				}
 			}
-			h.picker(c)
 			ui.Box(c).Grow(1)
 			if h.ui.busy {
-				if mallow.Button(c, "停止").Clicked() {
+				if mallow.IconButton(c, "停止", mallow.GlyphStop, mallow.IconButtonStyle{Size: 34}).Clicked() {
 					h.Stop()
 				}
-			} else if mallow.PrimaryButton(c, "发送").Disabled(!usable || (strings.TrimSpace(h.ui.draft) == "" && len(h.ui.pending) == 0)).Clicked() {
+			} else if mallow.IconButton(c, "发送", mallow.GlyphArrowUp, mallow.IconButtonStyle{Size: 34, Primary: true}).Disabled(!usable || (strings.TrimSpace(h.ui.draft) == "" && len(h.ui.pending) == 0)).Clicked() {
 				text := h.ui.draft
 				h.ui.draft = ""
 				h.Send(text)
@@ -376,9 +391,9 @@ func (h *Home) picker(c *ui.Context) {
 			current = m.Name
 		}
 	}
-	button := mallow.Plain(c, "选择模型").Padding(4, 8).Gap(2).MinWidth(0).Shrink(1)
+	button := mallow.Plain(c, "选择模型").Padding(6, 10).Gap(4).MinWidth(0).Shrink(1)
 	button.Children(func() {
-		ui.Text(c, current).FontSize(12).TextColor(mallow.Muted).SingleLine()
+		ui.Text(c, current).FontSize(16).FontWeight(500).TextColor(mallow.Text).SingleLine().Shrink(1).MinWidth(0)
 		mallow.GlyphChevronDown(c, mallow.Muted)
 	})
 	if button.Clicked() {
@@ -478,6 +493,9 @@ func (h *Home) entry(c *ui.Context, i int, e entry) ui.Element {
 	}
 	growing := i == h.ui.growing
 	return ui.Column(c).Gap(2).Children(func() {
+		if e.Model != "" {
+			ui.Text(c, e.Model).FontSize(12).FontWeight(500).TextColor(mallow.Muted).SingleLine().Padding(0, 0, 4, 0)
+		}
 		mallow.Markdown(c, strings.TrimSpace(e.Text), growing)
 		if growing {
 			return

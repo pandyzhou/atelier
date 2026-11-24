@@ -78,6 +78,8 @@ const (
 type entry struct {
 	Kind int    `json:"kind"`
 	Text string `json:"text"`
+	// Model is the model an answer is of.
+	Model string `json:"model,omitempty"`
 	// Files are what the user's message came with.
 	Files []attached `json:"files,omitempty"`
 }
@@ -353,7 +355,7 @@ func (h *Home) step(n int) {
 			came, waiting = "", false
 			mu.Unlock()
 			if run == h.ui.run {
-				h.grow(text)
+				h.grow(text, cfg.Model)
 			}
 		})
 	}
@@ -375,7 +377,7 @@ func (h *Home) step(n int) {
 			} else if g := h.ui.growing; g >= 0 && g < len(h.ui.entries) {
 				h.ui.entries[g].Text = text
 			} else {
-				h.ui.entries = append(h.ui.entries, entry{Kind: answer, Text: text})
+				h.ui.entries = append(h.ui.entries, entry{Kind: answer, Text: text, Model: cfg.Model})
 			}
 			h.ui.growing = -1
 			if len(msg.Calls) == 0 {
@@ -396,14 +398,14 @@ func (h *Home) step(n int) {
 
 // grow shows more of the answer that is coming: at the end of the one that
 // grows, or as a new one.
-func (h *Home) grow(text string) {
+func (h *Home) grow(text, model string) {
 	if text == "" {
 		return
 	}
 	if g := h.ui.growing; g >= 0 && g < len(h.ui.entries) {
 		h.ui.entries[g].Text += text
 	} else {
-		h.ui.entries = append(h.ui.entries, entry{Kind: answer, Text: text})
+		h.ui.entries = append(h.ui.entries, entry{Kind: answer, Text: text, Model: model})
 		h.ui.growing = len(h.ui.entries) - 1
 	}
 	h.ui.follow = true
