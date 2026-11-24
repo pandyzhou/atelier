@@ -4,6 +4,7 @@
 
 目前的功能：
 
+- **首页**：给 AI 助手写一句话。可以问某天有什么课、什么任务，也可以让它添加任务和课程。用的是“设置 → 模型”里的默认模型，模型需要支持工具调用。
 - **待办**：按日期看的任务。
   - **视图**：今天（含已过期）、最近 7 天、按周（可翻到上一周和下一周）、全部。勾掉的任务当天留在“今天完成的”里，之后在“按周”里它到期的那一天下面能看到。
   - **任务**：在列表里点右键选“新任务”，在弹出的对话框里填好再添加；点任务，它在原地展开成一张卡片，可以改标题、备注、日期（日历选择）和重复；右键任务可以改到今天或明天、设为每周重复、标为完成或删除。
@@ -46,6 +47,7 @@ GitHub Actions（`.github/workflows/windows.yml`）会打两个 Windows 包：�
 main.go                      外壳：侧边栏 + 当前功能页面，在 features() 里注册功能
 internal/feature/            Feature 接口：ID、Title、View
 internal/store/              每个功能一个 JSON 文件的存储
+internal/features/home/      首页：AI 助手
 internal/features/todo/      待办
 internal/features/timetable/ 课表
 ```

@@ -14,6 +14,7 @@ import (
 	"github.com/pandyzhou/mallow"
 
 	"github.com/pandyzhou/atelier/internal/feature"
+	"github.com/pandyzhou/atelier/internal/features/home"
 	"github.com/pandyzhou/atelier/internal/features/timetable"
 	"github.com/pandyzhou/atelier/internal/features/todo"
 	"github.com/pandyzhou/atelier/internal/llm"
@@ -22,11 +23,24 @@ import (
 )
 
 // features lists the app's features in sidebar order. Add new ones here.
-func features(s *store.Store) []feature.Feature {
-	tasks := todo.New(s)
+func (a *app) makeFeatures(s *store.Store) []feature.Feature {
+	tasks, table := todo.New(s), timetable.New(s)
 	return []feature.Feature{
+		home.New(tasks, table, home.Options{
+			Model: a.DefaultModel,
+			Complete: func(ctx context.Context, c llm.Config, r llm.Request) (llm.Message, error) {
+				return a.complete(ctx, c, r)
+			},
+			Background: a.background,
+			OpenSettings: func() {
+				if a.selected != settingsID {
+					a.before = a.selected
+				}
+				a.selected, a.section = settingsID, "models"
+			},
+		}),
 		tasks,
-		timetable.New(s),
+		table,
 		tasks.Calendar(),
 	}
 }
@@ -75,12 +89,16 @@ type app struct {
 	// listModels asks a provider for its models: llm.ListModels, but in
 	// tests.
 	listModels func(context.Context, llm.Config) ([]string, error)
-	win        mallow.Window // the window, for the title bar's buttons; nil in tests
+	// complete asks a model to go on with a conversation: llm.Complete,
+	// but in tests.
+	complete func(context.Context, llm.Config, llm.Request) (llm.Message, error)
+	win      mallow.Window // the window, for the title bar's buttons; nil in tests
 }
 
 func newApp(s *store.Store) *app {
-	a := &app{store: s, features: features(s), settings: settings{Appearance: string(mallow.ModeSystem)}}
-	a.box, a.ping, a.listModels = secret.New(s.Dir()), llm.Ping, llm.ListModels
+	a := &app{store: s, settings: settings{Appearance: string(mallow.ModeSystem)}}
+	a.features = a.makeFeatures(s)
+	a.box, a.ping, a.listModels, a.complete = secret.New(s.Dir()), llm.Ping, llm.ListModels, llm.Complete
 	// No updates until main says where they come from: tests have none.
 	a.updater = updater{enabled: func() bool { return false }}
 	if err := s.Load("settings", &a.settings); err != nil {

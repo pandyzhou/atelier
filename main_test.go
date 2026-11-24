@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image/png"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/pandyzhou/atelier/internal/features/home"
 	"github.com/pandyzhou/atelier/internal/features/timetable"
 	"github.com/pandyzhou/atelier/internal/features/todo"
 	"github.com/pandyzhou/atelier/internal/llm"
@@ -25,13 +27,21 @@ import (
 // would. An empty store keeps nothing on disk.
 func newTodoTester(t *testing.T) (*todo.Todo, *ui.Tester) {
 	t.Helper()
-	a := newApp(store.Open(""))
+	a := newTodoApp(store.Open(""))
 	a.win = &fakeWindow{}
 	tt := ui.NewTester(a.view, 1280, 800)
 	if !tt.HasText("待办") {
 		t.Fatalf("sidebar missing the to-do list, texts %q", tt.Texts())
 	}
 	return a.current().(*todo.Todo), tt
+}
+
+// newTodoApp is the app as most tests want it: on the to-do list, not on
+// the first page.
+func newTodoApp(s *store.Store) *app {
+	a := newApp(s)
+	a.selected = "todo"
+	return a
 }
 
 func click(t *testing.T, tt *ui.Tester, labels ...string) {
@@ -369,7 +379,7 @@ func TestTodoAddDialog(t *testing.T) {
 // The dialog fits a window as low as the lowest, at the largest size: with
 // the calendar open, its buttons are still in reach.
 func TestTodoAddDialogInLowWindow(t *testing.T) {
-	a := newApp(store.Open(""))
+	a := newTodoApp(store.Open(""))
 	a.settings.Size = "xlarge"
 	tt := ui.NewTester(a.view, 860, 520)
 	d := a.current().(*todo.Todo)
@@ -507,14 +517,14 @@ func TestTodoFold(t *testing.T) {
 // another. The day's periods and their times are set in a dialog.
 func TestTimetable(t *testing.T) {
 	dir := t.TempDir()
-	a := newApp(store.Open(dir))
+	a := newTodoApp(store.Open(dir))
 	a.win = &fakeWindow{}
 	tt := ui.NewTester(a.view, 1280, 800)
 	var titles []string
 	for _, f := range a.features {
 		titles = append(titles, f.Title())
 	}
-	if !slices.Equal(titles, []string{"待办", "课表", "月历"}) {
+	if !slices.Equal(titles, []string{"首页", "待办", "课表", "月历"}) {
 		t.Fatalf("the features are %q", titles)
 	}
 	click(t, tt, "课表")
@@ -595,13 +605,147 @@ func TestTimetable(t *testing.T) {
 	}
 
 	// After a restart it is all there.
-	b := newApp(store.Open(dir))
+	b := newTodoApp(store.Open(dir))
 	for _, f := range b.features {
 		if again, ok := f.(*timetable.Timetable); ok {
 			if len(again.Courses()) != 1 || again.Courses()[0].Name != "高等数学" || again.Periods()[2].Start != "10:00" {
 				t.Errorf("after restarting: %+v, %+v", again.Courses(), again.Periods())
 			}
 		}
+	}
+}
+
+// The app opens on the first page. What is written there goes to the
+// default model with the tasks and the timetable as they are; the tools it
+// calls add a task and a course, their results go back to it, and what it
+// says, and what was done, shows.
+func TestHome(t *testing.T) {
+	a := newApp(store.Open(t.TempDir()))
+	a.win = &fakeWindow{}
+	var tasks *todo.Todo
+	var table *timetable.Timetable
+	for _, f := range a.features {
+		switch f := f.(type) {
+		case *todo.Todo:
+			tasks = f
+		case *timetable.Timetable:
+			table = f
+		}
+	}
+	tasks.Add(todo.Task{Title: "交水电费", Due: tasks.Today()})
+	tt := ui.NewTester(a.view, 1280, 800)
+	if _, ok := a.current().(*home.Home); !ok {
+		t.Fatalf("the app opens on %T", a.current())
+	}
+	// Without a model there is nothing to send to, and a way to the
+	// settings.
+	if !tt.HasText("还没有可用的模型") {
+		t.Fatalf("no word of the missing model: %q", tt.Texts())
+	}
+	click(t, tt, "去设置模型")
+	if a.selected != settingsID || a.section != "models" {
+		t.Fatalf("去设置模型 leads to %q, %q", a.selected, a.section)
+	}
+	key, err := a.box.Seal("k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.settings.Models = []modelConfig{{ID: 1, Name: "P", Kind: string(llm.Chat), Key: key, Models: []string{"m"}}}
+	a.settings.Model, a.settings.ModelName = 1, "m"
+	click(t, tt, "首页")
+
+	var asked []llm.Request
+	call := func(id, name, input string) llm.Call {
+		return llm.Call{ID: id, Name: name, Input: json.RawMessage(input)}
+	}
+	answers := []llm.Message{
+		{Role: llm.Assistant, Calls: []llm.Call{
+			call("c1", "add_task", `{"title":"交报告","due":"2030-01-02"}`),
+			call("c2", "add_course", `{"name":"高等数学","weekday":3,"from_period":3,"to_period":4,"room":"A301"}`),
+		}},
+		{Role: llm.Assistant, Text: "都加好了。"},
+	}
+	a.complete = func(_ context.Context, c llm.Config, r llm.Request) (llm.Message, error) {
+		if c.Key != "k" || c.Model != "m" {
+			t.Errorf("asked with %+v", c)
+		}
+		asked = append(asked, r)
+		if len(asked) > len(answers) {
+			return llm.Message{}, &llm.Error{Message: "Key 不对，或者没有权限（401）"}
+		}
+		return answers[len(asked)-1], nil
+	}
+	click(t, tt, "给助手的话")
+	tt.Type("2030年1月2日交报告，再加一门周三三四节的高等数学")
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	tt.Frame()
+
+	if len(asked) != 2 {
+		t.Fatalf("the model was asked %d times (texts %q)", len(asked), tt.Texts())
+	}
+	// The model is told what there is, and what it can do.
+	if sys := asked[0].System; !strings.Contains(sys, "交水电费") || !strings.Contains(sys, tasks.Today()) {
+		t.Errorf("the model is not told the tasks and the day: %s", sys)
+	}
+	if len(asked[0].Tools) < 2 || len(asked[0].Messages) != 1 || asked[0].Messages[0].Text == "" {
+		t.Errorf("the first request: %+v", asked[0])
+	}
+	// What it called for was done, and it was told so.
+	if n := len(tasks.Tasks()); n != 2 || tasks.Tasks()[n-1].Title != "交报告" && tasks.Tasks()[0].Title != "交报告" {
+		t.Fatalf("the tasks after: %+v", tasks.Tasks())
+	}
+	if len(table.Courses()) != 1 || table.Courses()[0].Day != 2 || table.Courses()[0].From != 3 || table.Courses()[0].To != 4 || table.Courses()[0].Room != "A301" {
+		t.Fatalf("the courses after: %+v", table.Courses())
+	}
+	ms := asked[1].Messages
+	if len(ms) != 4 || ms[2].Role != llm.Result || ms[2].CallID != "c1" || ms[3].CallID != "c2" || !strings.Contains(ms[3].Text, "已添加") {
+		t.Fatalf("the second request's messages: %+v", ms)
+	}
+	// The second request tells the model of the course there is now.
+	if !strings.Contains(asked[1].System, "高等数学") {
+		t.Errorf("the model is not told the course it added: %s", asked[1].System)
+	}
+	for _, want := range []string{"2030年1月2日交报告", "已添加任务：交报告", "已添加课程：高等数学 · 周三第 3–4 节", "都加好了。"} {
+		if !tt.HasText(want) {
+			t.Errorf("the conversation does not show %q: %q", want, tt.Texts())
+		}
+	}
+
+	// A course that clashes is not added, and the model is told why.
+	answers = append(answers,
+		llm.Message{Role: llm.Assistant, Calls: []llm.Call{call("c3", "add_course", `{"name":"英语","weekday":3,"from_period":4,"to_period":4}`)}},
+		llm.Message{Role: llm.Assistant, Text: "那一节已经有课了。"})
+	click(t, tt, "给助手的话")
+	tt.Type("周三第四节加英语")
+	click(t, tt, "发送")
+	tt.Frame()
+	if len(table.Courses()) != 1 || len(asked) != 4 {
+		t.Fatalf("after a clashing course: %d courses, asked %d times", len(table.Courses()), len(asked))
+	}
+	if last := asked[3].Messages[len(asked[3].Messages)-1]; !strings.Contains(last.Text, "已经有“高等数学”了") {
+		t.Errorf("the model is told of the clash: %q", last.Text)
+	}
+
+	// What goes wrong shows, and the field takes the next message.
+	click(t, tt, "给助手的话")
+	tt.Type("再试一次")
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if !tt.HasText("Key 不对，或者没有权限（401）") || tt.HasText("正在想") {
+		t.Errorf("a failed request: %q", tt.Texts())
+	}
+
+	// A new conversation starts from nothing.
+	click(t, tt, "新对话")
+	if tt.HasText("都加好了。") || !tt.HasText("今天想安排点什么？") {
+		t.Errorf("after 新对话: %q", tt.Texts())
+	}
+	// A suggestion is sent as it is.
+	n := len(asked)
+	click(t, tt, "明天有哪些课？")
+	if len(asked) != n+1 || len(asked[n].Messages) != 1 || asked[n].Messages[0].Text != "明天有哪些课？" {
+		t.Errorf("a suggestion sent: %+v", asked[n:])
 	}
 }
 
@@ -619,7 +763,7 @@ func TestScreenshot(t *testing.T) {
 	if path == "" {
 		t.Skip("set ATELIER_SCREENSHOT to write a screenshot")
 	}
-	a := newApp(store.Open(""))
+	a := newTodoApp(store.Open(""))
 	// ATELIER_SCREENSHOT_STYLE picks the style: neumorphism or organic.
 	a.settings.Style = os.Getenv("ATELIER_SCREENSHOT_STYLE")
 	// ATELIER_SCREENSHOT_THEME picks the appearance: light, dark or system.
@@ -643,6 +787,20 @@ func TestScreenshot(t *testing.T) {
 		d.Add(k)
 	}
 	d.SetDone(d.Add(todo.Task{Title: "预约体检", Due: day(0)}), true)
+	// A model that answers by rote, for the first page: unless
+	// ATELIER_SCREENSHOT_NOMODEL is set, which shows it without one.
+	if os.Getenv("ATELIER_SCREENSHOT_NOMODEL") == "" {
+		a.settings.Models = []modelConfig{{ID: 1, Name: "P", Kind: string(llm.Chat), Models: []string{"m"}}}
+		a.settings.Model, a.settings.ModelName = 1, "m"
+		asked := 0
+		a.complete = func(context.Context, llm.Config, llm.Request) (llm.Message, error) {
+			asked++
+			if asked%2 == 1 {
+				return llm.Message{Role: llm.Assistant, Calls: []llm.Call{{ID: "c", Name: "add_task", Input: json.RawMessage(`{"title":"交实验报告","due":"` + day(1) + `"}`)}}}, nil
+			}
+			return llm.Message{Role: llm.Assistant, Text: "今天有两节课：第 1–2 节高等数学（A301），第 5–6 节大学英语（B102）。\n到期的任务有三项：写周报、修登录页的 bug、跑步 30 分钟。\n另外已经帮你加上明天要交的实验报告。"}, nil
+		}
+	}
 	for _, f := range a.features {
 		tb, ok := f.(*timetable.Timetable)
 		if !ok {
@@ -699,7 +857,7 @@ func TestScreenshot(t *testing.T) {
 // The appearance follows the system until the user picks one, which is saved.
 func TestAppearance(t *testing.T) {
 	dir := t.TempDir()
-	a := newApp(store.Open(dir))
+	a := newTodoApp(store.Open(dir))
 	tt := ui.NewTester(a.view, 1280, 800)
 	tt.SetDark(true)
 	tt.Frame()
@@ -725,7 +883,7 @@ func TestAppearance(t *testing.T) {
 		t.Errorf("after the gear a second time, %q is selected", a.selected)
 	}
 	// A new start reads the choice back, whatever the system is.
-	b := newApp(store.Open(dir))
+	b := newTodoApp(store.Open(dir))
 	tb := ui.NewTester(b.view, 1280, 800)
 	tb.SetDark(true)
 	tb.Frame()
@@ -737,7 +895,7 @@ func TestAppearance(t *testing.T) {
 // The style is chosen on the settings page, and saved.
 func TestStyle(t *testing.T) {
 	dir := t.TempDir()
-	a := newApp(store.Open(dir))
+	a := newTodoApp(store.Open(dir))
 	tt := ui.NewTester(a.view, 1280, 800)
 	tt.Frame()
 	if mallow.CurrentLook() != mallow.Neumorphism {
@@ -754,7 +912,7 @@ func TestStyle(t *testing.T) {
 	if k := a.current().(*todo.Todo).Tasks()[0]; !tt.HasText("Buy milk") || k.Repeat != todo.RepeatWeekly {
 		t.Errorf("the task edited on the organic to-do page: %+v, %q", k, tt.Texts())
 	}
-	b := newApp(store.Open(dir))
+	b := newTodoApp(store.Open(dir))
 	ui.NewTester(b.view, 1280, 800).Frame()
 	if b.settings.Style != string(mallow.StyleOrganic) || mallow.CurrentLook() != mallow.Organic {
 		t.Errorf("after restarting: style %q", b.settings.Style)
@@ -765,7 +923,7 @@ func TestStyle(t *testing.T) {
 // saved.
 func TestTextSettings(t *testing.T) {
 	dir := t.TempDir()
-	a := newApp(store.Open(dir))
+	a := newTodoApp(store.Open(dir))
 	tt := ui.NewTester(a.view, 1280, 800)
 	click(t, tt, "设置", "特大")
 	if a.settings.Size != "xlarge" || zoomOf(a.settings.Size) != 1.25 {
@@ -794,7 +952,7 @@ func TestTextSettings(t *testing.T) {
 		}
 		break
 	}
-	b := newApp(store.Open(dir))
+	b := newTodoApp(store.Open(dir))
 	ui.NewTester(b.view, 1280, 800).Frame()
 	if b.settings.Size != "xlarge" || b.settings.Font != a.settings.Font {
 		t.Errorf("after restarting: size %q, font %q", b.settings.Size, b.settings.Font)
@@ -807,7 +965,7 @@ func TestTextSettings(t *testing.T) {
 // Only what a font draws in its place differs.
 func TestFontsKeepLayout(t *testing.T) {
 	defer func() { mallow.Font = defaultFont }()
-	a := newApp(store.Open(""))
+	a := newTodoApp(store.Open(""))
 	st := ui.NewTester(a.view, 1280, 800)
 	add(t, st, "Buy milk")
 	click(t, st, "打开Buy milk")
@@ -831,7 +989,7 @@ func TestFontsKeepLayout(t *testing.T) {
 			}
 		}
 	}
-	for _, page := range []string{"待办", "课表", "月历", "设置"} {
+	for _, page := range []string{"首页", "待办", "课表", "月历", "设置"} {
 		click(t, st, page)
 		for _, s := range sizes {
 			fonts += steady(t, a, s.id, page, func() map[string]place { return places(st) })
@@ -912,7 +1070,7 @@ func TestWebFont(t *testing.T) {
 			return nil
 		}
 	}
-	a := newApp(store.Open(dir))
+	a := newTodoApp(store.Open(dir))
 	fake(a)
 	tt := ui.NewTester(a.view, 1280, 800)
 	click(t, tt, "设置")
@@ -940,7 +1098,7 @@ func TestWebFont(t *testing.T) {
 
 	// After a restart it is read from where it was kept.
 	registered = nil
-	b := newApp(store.Open(dir))
+	b := newTodoApp(store.Open(dir))
 	fake(b)
 	b.restoreFont()
 	if !slices.Equal(registered, []string{"Test Web Font:font"}) || fetched != 2 {
@@ -952,7 +1110,7 @@ func TestWebFont(t *testing.T) {
 // settings say it quits, which is saved; quitting closes it either way.
 func TestCloseToTray(t *testing.T) {
 	dir := t.TempDir()
-	a := newApp(store.Open(dir))
+	a := newTodoApp(store.Open(dir))
 	tt := ui.NewTester(a.view, 1280, 800)
 	if !staysInTray(a.settings, false) || staysInTray(a.settings, true) {
 		t.Fatalf("at first: closing stays %v, quitting stays %v", staysInTray(a.settings, false), staysInTray(a.settings, true))
@@ -961,7 +1119,7 @@ func TestCloseToTray(t *testing.T) {
 	if !a.settings.CloseQuits || staysInTray(a.settings, false) {
 		t.Fatalf("after turning it off: %+v", a.settings.CloseQuits)
 	}
-	if b := newApp(store.Open(dir)); !b.settings.CloseQuits {
+	if b := newTodoApp(store.Open(dir)); !b.settings.CloseQuits {
 		t.Errorf("after restarting, closing the window does not quit")
 	}
 	click(t, tt, "留在托盘")
@@ -995,7 +1153,7 @@ func TestInstalledFont(t *testing.T) {
 // adds models too.
 func TestModelSettings(t *testing.T) {
 	dir := t.TempDir()
-	a := newApp(store.Open(dir))
+	a := newTodoApp(store.Open(dir))
 	var pinged []llm.Config
 	var answer error
 	a.ping = func(_ context.Context, c llm.Config) error {
@@ -1107,7 +1265,7 @@ func TestModelSettings(t *testing.T) {
 	}
 	// After a restart the provider is there, and its key opens.
 	want.Model = "other-model"
-	if c, ok := newApp(store.Open(dir)).DefaultModel(); !ok || c != want {
+	if c, ok := newTodoApp(store.Open(dir)).DefaultModel(); !ok || c != want {
 		t.Fatalf("after restarting, the default model is %+v, %v", c, ok)
 	}
 	click(t, tt, "移除other-model")
@@ -1138,7 +1296,7 @@ func TestModelSettingsOfOld(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(old), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	a := newApp(store.Open(dir))
+	a := newTodoApp(store.Open(dir))
 	ms := a.settings.Models
 	if len(ms) != 2 || !slices.Equal(ms[0].Models, []string{"claude-opus-5-5"}) || !slices.Equal(ms[1].Models, []string{"deep"}) || ms[0].Model != "" {
 		t.Fatalf("the providers read: %+v", ms)
@@ -1151,7 +1309,7 @@ func TestModelSettingsOfOld(t *testing.T) {
 // A newer version is found in the settings, installed, and run by a
 // relaunch; a build that cannot update says so.
 func TestUpdate(t *testing.T) {
-	a := newApp(store.Open(""))
+	a := newTodoApp(store.Open(""))
 	tt := ui.NewTester(a.view, 1280, 800)
 	click(t, tt, "设置", "关于")
 	if !tt.HasText("这个版本不能自动更新：它不是发布版，或者装在了没有写入权限的位置") || tt.HasText("检查更新") {
@@ -1234,7 +1392,7 @@ func (w *fakeWindow) IsMaximized() bool { return w.maximized }
 // or restoring as the window is.
 func TestTitleBarButtons(t *testing.T) {
 	win := &fakeWindow{}
-	a := newApp(store.Open(""))
+	a := newTodoApp(store.Open(""))
 	a.win = win
 	tt := ui.NewTester(a.view, 1280, 800)
 	for _, label := range []string{"最小化", "最大化", "还原", "关闭"} {

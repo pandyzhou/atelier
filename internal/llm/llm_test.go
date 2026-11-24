@@ -196,3 +196,81 @@ func TestListModels(t *testing.T) {
 		t.Errorf("no error without a key")
 	}
 }
+
+// A conversation with tools goes to each kind as its service reads it, and
+// what comes back is read the same from all three: text, and the calls of
+// tools; the calls' results go back in the next request.
+func TestComplete(t *testing.T) {
+	tools := []Tool{{Name: "add_task", Description: "adds", Parameters: map[string]any{"type": "object"}}}
+	for _, c := range []struct {
+		kind           Kind
+		calls, done    string
+		toolsAt, sysAt string
+	}{
+		{Anthropic,
+			`{"content":[{"type":"thinking","thinking":"hm","signature":"s"},{"type":"text","text":"好"},{"type":"tool_use","id":"c1","name":"add_task","input":{"title":"x"}}],"stop_reason":"tool_use"}`,
+			`{"content":[{"type":"text","text":"完成"}]}`, "input_schema", "system"},
+		{Chat,
+			`{"choices":[{"message":{"role":"assistant","content":"好","reasoning_content":"hm","tool_calls":[{"id":"c1","type":"function","function":{"name":"add_task","arguments":"{\"title\":\"x\"}"}}]}}]}`,
+			`{"choices":[{"message":{"role":"assistant","content":"完成"}}]}`, "function", "messages"},
+		{Responses,
+			`{"output":[{"type":"reasoning","id":"r1","summary":[]},{"type":"message","content":[{"type":"output_text","text":"好"}]},{"type":"function_call","call_id":"c1","name":"add_task","arguments":"{\"title\":\"x\"}"}]}`,
+			`{"output":[{"type":"message","content":[{"type":"output_text","text":"完成"}]}]}`, "parameters", "instructions"},
+	} {
+		s := newService(t, 200, c.calls)
+		cfg := Config{Kind: c.kind, BaseURL: s.URL, Key: "k", Model: "m"}
+		req := Request{System: "sys", Messages: []Message{{Role: User, Text: "加个任务"}}, Tools: tools}
+		got, err := Complete(ctx(t), cfg, req)
+		if err != nil {
+			t.Fatalf("%s: %v", c.kind, err)
+		}
+		if got.Role != Assistant || got.Text != "好" || len(got.Calls) != 1 || got.Calls[0].ID != "c1" || got.Calls[0].Name != "add_task" || string(got.Calls[0].Input) != `{"title":"x"}` {
+			t.Errorf("%s: read %+v", c.kind, got)
+		}
+		sent, _ := json.Marshal(s.body)
+		if s.body["model"] != "m" || !strings.Contains(string(sent), c.toolsAt) || !strings.Contains(string(sent), `"sys"`) || !strings.Contains(string(sent), c.sysAt) || !strings.Contains(string(sent), "加个任务") {
+			t.Errorf("%s: sent %s", c.kind, sent)
+		}
+
+		// The next request carries the model's message as it came, its
+		// reasoning too, and the call's result.
+		s.answer = c.done
+		req.Messages = append(req.Messages, got, Message{Role: Result, CallID: "c1", Text: "已添加"})
+		got, err = Complete(ctx(t), cfg, req)
+		if err != nil || got.Text != "完成" || len(got.Calls) != 0 {
+			t.Errorf("%s: the second answer %+v, %v", c.kind, got, err)
+		}
+		sent, _ = json.Marshal(s.body)
+		for _, want := range []string{"hm", "c1", "add_task", "已添加", "加个任务"} {
+			if c.kind == Responses && want == "hm" {
+				want = "r1"
+			}
+			if !strings.Contains(string(sent), want) {
+				t.Errorf("%s: the second request lacks %q: %s", c.kind, want, sent)
+			}
+		}
+
+		// A conversation begun with another kind's model goes on with this
+		// one: its message is written anew.
+		other := Message{Role: Assistant, Text: "好", Calls: []Call{{ID: "c9", Name: "add_task", Input: json.RawMessage(`{"title":"y"}`)}}}
+		req.Messages = []Message{{Role: User, Text: "加个任务"}, other, {Role: Result, CallID: "c9", Text: "已添加"}}
+		if _, err = Complete(ctx(t), cfg, req); err != nil {
+			t.Errorf("%s: %v", c.kind, err)
+		}
+		if sent, _ = json.Marshal(s.body); !strings.Contains(string(sent), "c9") || !strings.Contains(string(sent), "title") {
+			t.Errorf("%s: another kind's message sent as %s", c.kind, sent)
+		}
+	}
+
+	s := newService(t, 401, `{"error":{"message":"bad key"}}`)
+	if _, err := Complete(ctx(t), Config{Kind: Chat, BaseURL: s.URL, Key: "k", Model: "m"}, Request{}); err == nil || !strings.Contains(err.Error(), "Key 不对") {
+		t.Errorf("a refused request: %v", err)
+	}
+	s = newService(t, 200, `<html>`)
+	if _, err := Complete(ctx(t), Config{Kind: Chat, BaseURL: s.URL, Key: "k", Model: "m"}, Request{}); err == nil {
+		t.Errorf("no error for an answer that is not the API's")
+	}
+	if _, err := Complete(ctx(t), Config{Kind: Chat, Model: "m"}, Request{}); err == nil {
+		t.Errorf("no error without a key")
+	}
+}
