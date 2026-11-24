@@ -101,7 +101,9 @@ func (a *app) view(c *ui.Context) {
 	}
 	c.SetZoom(zoomOf(a.settings.Size))
 	mallow.UseStyle(c, mallow.Style(a.settings.Style), mallow.Mode(a.settings.Appearance))
-	ui.Column(c).Fill().Children(func() {
+	// Lines are as high for every font: left to the font, each sets its
+	// own, and choosing another moves everything on the page.
+	ui.Column(c).Fill().LineHeight(lineHeight).Children(func() {
 		mallow.TitleBar(c, a.win, nil)
 		a.body(c)
 	})
@@ -165,6 +167,10 @@ func version() string {
 	}
 	return "开发版"
 }
+
+// lineHeight is the height of a line of text, as a multiple of its size:
+// about what the default font sets for itself.
+const lineHeight = 1.3
 
 // defaultFont is the family text is set in unless another is chosen.
 const defaultFont = "Microsoft YaHei UI"
