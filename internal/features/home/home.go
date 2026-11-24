@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pandyzhou/atelier/internal/features/timetable"
@@ -23,10 +24,13 @@ var dayNames = [7]string{"周一", "周二", "周三", "周四", "周五", "周�
 type Options struct {
 	// Model returns the model to ask, and whether one is set.
 	Model func() (llm.Config, bool)
-	// Complete asks it: llm.Complete, but in tests.
-	Complete func(context.Context, llm.Config, llm.Request) (llm.Message, error)
+	// Complete asks it, giving onText the answer's text as it comes, off
+	// the UI's thread: llm.Stream, but in tests.
+	Complete func(ctx context.Context, c llm.Config, r llm.Request, onText func(string)) (llm.Message, error)
 	// Background runs work off the UI's thread, then what it returns on it.
 	Background func(work func() func())
+	// OnUI runs fn on the UI's thread, and shows the window anew.
+	OnUI func(fn func())
 	// OpenSettings shows the models' settings.
 	OpenSettings func()
 }
@@ -81,13 +85,13 @@ func (h *Home) Send(text string) {
 
 // Reset starts a new conversation; an answer still on its way is dropped.
 func (h *Home) Reset() {
-	h.ui = viewState{run: h.ui.run + 1}
+	h.ui = viewState{run: h.ui.run + 1, growing: -1}
 }
 
 // fail ends the turn with what went wrong.
 func (h *Home) fail(message string) {
 	h.ui.entries = append(h.ui.entries, entry{problem, message})
-	h.ui.busy, h.ui.follow = false, true
+	h.ui.busy, h.ui.follow, h.ui.growing = false, true, -1
 }
 
 // step asks the model to go on with the conversation, does what it calls
@@ -100,10 +104,35 @@ func (h *Home) step(n int) {
 	}
 	req := llm.Request{System: h.system(), Messages: append([]llm.Message(nil), h.ui.history...), Tools: tools}
 	run := h.ui.run
+	h.ui.growing = -1
+	// The text that came and does not show yet: it comes off the UI's
+	// thread, piece by piece, and is shown on it, all there is at once.
+	var mu sync.Mutex
+	var came string
+	waiting := false
+	onText := func(piece string) {
+		mu.Lock()
+		came += piece
+		if waiting {
+			mu.Unlock()
+			return
+		}
+		waiting = true
+		mu.Unlock()
+		h.OnUI(func() {
+			mu.Lock()
+			text := came
+			came, waiting = "", false
+			mu.Unlock()
+			if run == h.ui.run {
+				h.grow(text)
+			}
+		})
+	}
 	h.Background(func() func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
-		msg, err := h.Complete(ctx, cfg, req)
+		msg, err := h.Complete(ctx, cfg, req, onText)
 		return func() {
 			if run != h.ui.run {
 				return // a new conversation was started meanwhile
@@ -114,9 +143,14 @@ func (h *Home) step(n int) {
 			}
 			h.ui.history = append(h.ui.history, msg)
 			h.ui.follow = true
-			if text := strings.TrimSpace(msg.Text); text != "" {
+			// The whole answer, in place of what of it showed as it came.
+			if text := strings.TrimSpace(msg.Text); text == "" {
+			} else if g := h.ui.growing; g >= 0 && g < len(h.ui.entries) {
+				h.ui.entries[g].text = text
+			} else {
 				h.ui.entries = append(h.ui.entries, entry{answer, text})
 			}
+			h.ui.growing = -1
 			if len(msg.Calls) == 0 {
 				h.ui.busy = false
 				return
@@ -131,6 +165,21 @@ func (h *Home) step(n int) {
 			h.step(n + 1)
 		}
 	})
+}
+
+// grow shows more of the answer that is coming: at the end of the one that
+// grows, or as a new one.
+func (h *Home) grow(text string) {
+	if text == "" {
+		return
+	}
+	if g := h.ui.growing; g >= 0 && g < len(h.ui.entries) {
+		h.ui.entries[g].text += text
+	} else {
+		h.ui.entries = append(h.ui.entries, entry{answer, text})
+		h.ui.growing = len(h.ui.entries) - 1
+	}
+	h.ui.follow = true
 }
 
 // tools are what the model can have done.

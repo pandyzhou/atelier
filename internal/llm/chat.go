@@ -63,29 +63,40 @@ const maxAnswer = 4096
 // Complete sends the conversation to the model and returns its next
 // message: text, calls of tools, or both. The error is an *Error.
 func Complete(ctx context.Context, c Config, r Request) (Message, error) {
-	switch {
-	case strings.TrimSpace(c.Key) == "":
-		return Message{}, &Error{Message: "还没有填 Key"}
-	case strings.TrimSpace(c.Model) == "":
-		return Message{}, &Error{Message: "还没有填模型名"}
-	}
-	c.Key, c.Model = strings.TrimSpace(c.Key), strings.TrimSpace(c.Model)
-	var body map[string]any
-	var read func([]byte) (Message, bool)
-	switch c.Kind {
-	case Anthropic:
-		body, read = anthropicRequest(c, r), anthropicAnswer
-	case Chat:
-		body, read = chatRequest(c, r), chatAnswer
-	case Responses:
-		body, read = responsesRequest(c, r), responsesAnswer
-	default:
-		return Message{}, &Error{Message: "不认识的接口类型：" + string(c.Kind)}
+	c, body, read, err := prepare(c, r)
+	if err != nil {
+		return Message{}, err
 	}
 	text, status, err := send(ctx, c.Endpoint(), header(c), body)
 	if err != nil {
 		return Message{}, err
 	}
+	return finish(c, read, text, status)
+}
+
+// prepare checks c, tidies it, and writes the request of its kind for r,
+// with what reads the answer to it.
+func prepare(c Config, r Request) (Config, map[string]any, func([]byte) (Message, bool), error) {
+	switch {
+	case strings.TrimSpace(c.Key) == "":
+		return c, nil, nil, &Error{Message: "还没有填 Key"}
+	case strings.TrimSpace(c.Model) == "":
+		return c, nil, nil, &Error{Message: "还没有填模型名"}
+	}
+	c.Key, c.Model = strings.TrimSpace(c.Key), strings.TrimSpace(c.Model)
+	switch c.Kind {
+	case Anthropic:
+		return c, anthropicRequest(c, r), anthropicAnswer, nil
+	case Chat:
+		return c, chatRequest(c, r), chatAnswer, nil
+	case Responses:
+		return c, responsesRequest(c, r), responsesAnswer, nil
+	}
+	return c, nil, nil, &Error{Message: "不认识的接口类型：" + string(c.Kind)}
+}
+
+// finish reads the model's message from the body of an answer.
+func finish(c Config, read func([]byte) (Message, bool), text []byte, status int) (Message, error) {
 	m, ok := read(text)
 	if !ok {
 		return Message{}, &Error{Message: "这个地址回的不是接口的数据，地址可能不对", Status: status}

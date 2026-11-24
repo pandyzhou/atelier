@@ -665,13 +665,22 @@ func TestHome(t *testing.T) {
 		}},
 		{Role: llm.Assistant, Text: "都加好了。"},
 	}
-	a.complete = func(_ context.Context, c llm.Config, r llm.Request) (llm.Message, error) {
+	// The text comes in two pieces, and shows as far as it has come.
+	var growing []string
+	a.complete = func(_ context.Context, c llm.Config, r llm.Request, onText func(string)) (llm.Message, error) {
 		if c.Key != "k" || c.Model != "m" {
 			t.Errorf("asked with %+v", c)
 		}
 		asked = append(asked, r)
 		if len(asked) > len(answers) {
+			onText("我来")
 			return llm.Message{}, &llm.Error{Message: "Key 不对，或者没有权限（401）"}
+		}
+		if text := []rune(answers[len(asked)-1].Text); len(text) > 2 {
+			onText(string(text[:2]))
+			tt.Frame()
+			growing = append(growing, strings.Join(tt.Texts(), "|"))
+			onText(string(text[2:]))
 		}
 		return answers[len(asked)-1], nil
 	}
@@ -706,6 +715,12 @@ func TestHome(t *testing.T) {
 	if !strings.Contains(asked[1].System, "高等数学") {
 		t.Errorf("the model is not told the course it added: %s", asked[1].System)
 	}
+	if len(growing) != 1 || !strings.Contains(growing[0], "|都加|") || strings.Contains(growing[0], "都加好了") || strings.Contains(growing[0], "正在想") {
+		t.Errorf("as the answer came, the page showed %q", growing)
+	}
+	if shown(tt, "都加好了。") != 1 {
+		t.Errorf("the answer shows %d times: %q", shown(tt, "都加好了。"), tt.Texts())
+	}
 	for _, want := range []string{"2030年1月2日交报告", "已添加任务：交报告", "已添加课程：高等数学 · 周三第 3–4 节", "都加好了。"} {
 		if !tt.HasText(want) {
 			t.Errorf("the conversation does not show %q: %q", want, tt.Texts())
@@ -732,7 +747,7 @@ func TestHome(t *testing.T) {
 	tt.Type("再试一次")
 	tt.Key(0, ui.KeyEnter)
 	tt.Frame()
-	if !tt.HasText("Key 不对，或者没有权限（401）") || tt.HasText("正在想") {
+	if !tt.HasText("Key 不对，或者没有权限（401）") || tt.HasText("正在想") || shown(tt, "我来") != 1 {
 		t.Errorf("a failed request: %q", tt.Texts())
 	}
 
@@ -793,7 +808,7 @@ func TestScreenshot(t *testing.T) {
 		a.settings.Models = []modelConfig{{ID: 1, Name: "P", Kind: string(llm.Chat), Models: []string{"m"}}}
 		a.settings.Model, a.settings.ModelName = 1, "m"
 		asked := 0
-		a.complete = func(context.Context, llm.Config, llm.Request) (llm.Message, error) {
+		a.complete = func(context.Context, llm.Config, llm.Request, func(string)) (llm.Message, error) {
 			asked++
 			if asked%2 == 1 {
 				return llm.Message{Role: llm.Assistant, Calls: []llm.Call{{ID: "c", Name: "add_task", Input: json.RawMessage(`{"title":"交实验报告","due":"` + day(1) + `"}`)}}}, nil

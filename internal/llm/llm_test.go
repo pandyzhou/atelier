@@ -19,6 +19,7 @@ type service struct {
 	body                     map[string]any
 	status                   int
 	answer                   string
+	ctype                    string // the answer's Content-Type, JSON's when ""
 }
 
 func newService(t *testing.T, status int, answer string) *service {
@@ -29,7 +30,11 @@ func newService(t *testing.T, status int, answer string) *service {
 		data, _ := io.ReadAll(r.Body)
 		s.body = nil
 		json.Unmarshal(data, &s.body)
-		w.Header().Set("Content-Type", "application/json")
+		ctype := s.ctype
+		if ctype == "" {
+			ctype = "application/json"
+		}
+		w.Header().Set("Content-Type", ctype)
 		w.WriteHeader(s.status)
 		io.WriteString(w, s.answer)
 	}))
@@ -272,5 +277,120 @@ func TestComplete(t *testing.T) {
 	}
 	if _, err := Complete(ctx(t), Config{Kind: Chat, Model: "m"}, Request{}); err == nil {
 		t.Errorf("no error without a key")
+	}
+}
+
+// A streamed answer gives its text piece by piece, and comes to the same
+// message as one sent whole: its text, its calls, and what goes back to
+// the service with the next request.
+func TestStream(t *testing.T) {
+	events := func(lines ...string) string {
+		var b strings.Builder
+		for _, l := range lines {
+			b.WriteString("event: x\ndata: " + l + "\n\n")
+		}
+		return b.String()
+	}
+	for _, c := range []struct {
+		kind   Kind
+		answer string
+		back   string // what the next request must carry
+	}{
+		{Anthropic, events(
+			`{"type":"message_start","message":{"content":[]}}`,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hm"}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig1"}}`,
+			`{"type":"content_block_stop","index":0}`,
+			`{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}`,
+			`{"type":"ping"}`,
+			`{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"你"}}`,
+			`{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"好"}}`,
+			`{"type":"content_block_stop","index":1}`,
+			`{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"c1","name":"add_task","input":{}}}`,
+			`{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"title\":"}}`,
+			`{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"\"x\"}"}}`,
+			`{"type":"content_block_stop","index":2}`,
+			`{"type":"message_delta","delta":{"stop_reason":"tool_use"}}`,
+			`{"type":"message_stop"}`), "sig1"},
+		{Chat, events(
+			`{"choices":[{"delta":{"role":"assistant","content":"","reasoning_content":"hm"}}]}`,
+			`{"choices":[{"delta":{"content":"你"}}]}`,
+			`{"choices":[{"delta":{"content":"好"}}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"add_task","arguments":""}}]}}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"title\":"}}]}}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"x\"}"}}]}}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+			`{"choices":[],"usage":{}}`) + "data: [DONE]\n\n", "hm"},
+		{Responses, events(
+			`{"type":"response.created","response":{"output":[],"error":null}}`,
+			`{"type":"response.output_item.done","item":{"type":"reasoning","id":"r1","summary":[]}}`,
+			`{"type":"response.output_text.delta","delta":"你"}`,
+			`{"type":"response.output_text.delta","delta":"好"}`,
+			`{"type":"response.output_item.done","item":{"type":"message","content":[{"type":"output_text","text":"你好"}]}}`,
+			`{"type":"response.function_call_arguments.delta","delta":"{\"title\":"}`,
+			`{"type":"response.output_item.done","item":{"type":"function_call","call_id":"c1","name":"add_task","arguments":"{\"title\":\"x\"}"}}`,
+			`{"type":"response.completed","response":{"error":null,"output":[{"type":"reasoning","id":"r1","summary":[]},{"type":"message","content":[{"type":"output_text","text":"你好"}]},{"type":"function_call","call_id":"c1","name":"add_task","arguments":"{\"title\":\"x\"}"}]}}`), "r1"},
+	} {
+		s := newService(t, 200, c.answer)
+		s.ctype = "text/event-stream"
+		cfg := Config{Kind: c.kind, BaseURL: s.URL, Key: "k", Model: "m"}
+		req := Request{Messages: []Message{{Role: User, Text: "加个任务"}}}
+		var pieces []string
+		got, err := Stream(ctx(t), cfg, req, func(p string) { pieces = append(pieces, p) })
+		if err != nil {
+			t.Fatalf("%s: %v", c.kind, err)
+		}
+		if strings.Join(pieces, "|") != "你|好" {
+			t.Errorf("%s: the text came as %q", c.kind, pieces)
+		}
+		if got.Role != Assistant || got.Text != "你好" || len(got.Calls) != 1 || got.Calls[0].ID != "c1" || got.Calls[0].Name != "add_task" || string(got.Calls[0].Input) != `{"title":"x"}` {
+			t.Errorf("%s: read %+v", c.kind, got)
+		}
+		if s.body["stream"] != true {
+			t.Errorf("%s: the request does not ask for a stream: %v", c.kind, s.body)
+		}
+		// The message goes back as a whole one would.
+		req.Messages = append(req.Messages, got, Message{Role: Result, CallID: "c1", Text: "已添加"})
+		s.answer, pieces = strings.ReplaceAll(c.answer, "c1", "c2"), nil
+		if _, err := Stream(ctx(t), cfg, req, func(string) {}); err != nil {
+			t.Errorf("%s: %v", c.kind, err)
+		}
+		sent, _ := json.Marshal(s.body)
+		for _, want := range []string{c.back, "c1", "add_task", "已添加", "你好"} {
+			if !strings.Contains(string(sent), want) {
+				t.Errorf("%s: the next request lacks %q: %s", c.kind, want, sent)
+			}
+		}
+	}
+
+	// A service that does not stream answers whole: its text is one piece.
+	s := newService(t, 200, `{"choices":[{"message":{"role":"assistant","content":"你好"}}]}`)
+	var pieces []string
+	got, err := Stream(ctx(t), Config{Kind: Chat, BaseURL: s.URL, Key: "k", Model: "m"}, Request{}, func(p string) { pieces = append(pieces, p) })
+	if err != nil || got.Text != "你好" || len(pieces) != 1 || pieces[0] != "你好" {
+		t.Errorf("an answer sent whole: %+v, %v, pieces %q", got, err, pieces)
+	}
+	// What goes wrong, before the stream or in it, is said.
+	s = newService(t, 401, `{"error":{"message":"bad key"}}`)
+	if _, err := Stream(ctx(t), Config{Kind: Chat, BaseURL: s.URL, Key: "k", Model: "m"}, Request{}, func(string) {}); err == nil || !strings.Contains(err.Error(), "Key 不对") {
+		t.Errorf("a refused request: %v", err)
+	}
+	for kind, event := range map[Kind]string{
+		Anthropic: `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`,
+		Chat:      `{"error":{"message":"Overloaded"}}`,
+		Responses: `{"type":"response.failed","response":{"error":{"message":"Overloaded"}}}`,
+	} {
+		s = newService(t, 200, events(event))
+		s.ctype = "text/event-stream"
+		if _, err := Stream(ctx(t), Config{Kind: kind, BaseURL: s.URL, Key: "k", Model: "m"}, Request{}, func(string) {}); err == nil || !strings.Contains(err.Error(), "Overloaded") {
+			t.Errorf("%s: an error in the stream: %v", kind, err)
+		}
+	}
+	// A stream that ends with nothing said is no answer.
+	s = newService(t, 200, "")
+	s.ctype = "text/event-stream"
+	if _, err := Stream(ctx(t), Config{Kind: Chat, BaseURL: s.URL, Key: "k", Model: "m"}, Request{}, func(string) {}); err == nil {
+		t.Errorf("no error for an empty stream")
 	}
 }

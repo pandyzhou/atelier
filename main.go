@@ -28,10 +28,11 @@ func (a *app) makeFeatures(s *store.Store) []feature.Feature {
 	return []feature.Feature{
 		home.New(tasks, table, home.Options{
 			Model: a.DefaultModel,
-			Complete: func(ctx context.Context, c llm.Config, r llm.Request) (llm.Message, error) {
-				return a.complete(ctx, c, r)
+			Complete: func(ctx context.Context, c llm.Config, r llm.Request, onText func(string)) (llm.Message, error) {
+				return a.complete(ctx, c, r, onText)
 			},
 			Background: a.background,
+			OnUI:       a.onUI,
 			OpenSettings: func() {
 				if a.selected != settingsID {
 					a.before = a.selected
@@ -89,16 +90,16 @@ type app struct {
 	// listModels asks a provider for its models: llm.ListModels, but in
 	// tests.
 	listModels func(context.Context, llm.Config) ([]string, error)
-	// complete asks a model to go on with a conversation: llm.Complete,
-	// but in tests.
-	complete func(context.Context, llm.Config, llm.Request) (llm.Message, error)
+	// complete asks a model to go on with a conversation, its answer's
+	// text coming piece by piece: llm.Stream, but in tests.
+	complete func(context.Context, llm.Config, llm.Request, func(string)) (llm.Message, error)
 	win      mallow.Window // the window, for the title bar's buttons; nil in tests
 }
 
 func newApp(s *store.Store) *app {
 	a := &app{store: s, settings: settings{Appearance: string(mallow.ModeSystem)}}
 	a.features = a.makeFeatures(s)
-	a.box, a.ping, a.listModels, a.complete = secret.New(s.Dir()), llm.Ping, llm.ListModels, llm.Complete
+	a.box, a.ping, a.listModels, a.complete = secret.New(s.Dir()), llm.Ping, llm.ListModels, llm.Stream
 	// No updates until main says where they come from: tests have none.
 	a.updater = updater{enabled: func() bool { return false }}
 	if err := s.Load("settings", &a.settings); err != nil {

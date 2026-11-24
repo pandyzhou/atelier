@@ -17,6 +17,9 @@ type viewState struct {
 	busy    bool          // an answer is on its way
 	follow  bool          // the conversation grew: show its end
 	run     int           // counts the conversations, to tell an old answer
+	// growing is the entry of the answer that is coming, which grows as
+	// it does: -1 when none shows yet.
+	growing int
 }
 
 // suggestions are things to ask, to start from.
@@ -120,7 +123,7 @@ func (h *Home) conversation(c *ui.Context) {
 			for i, e := range h.ui.entries {
 				last = h.entry(c.Key(i), e)
 			}
-			if h.ui.busy {
+			if h.ui.busy && h.ui.growing < 0 {
 				last = ui.Text(c, "正在想…").FontSize(13).TextColor(mallow.Muted)
 			}
 			if h.ui.follow {
@@ -157,5 +160,5 @@ func (h *Home) entry(c *ui.Context, e entry) ui.Element {
 	case problem:
 		return ui.Text(c, e.text).FontSize(13).TextColor(mallow.Danger)
 	}
-	return ui.Text(c, e.text).FontSize(14).TextColor(mallow.Text).Selectable()
+	return ui.Text(c, strings.TrimSpace(e.text)).FontSize(14).TextColor(mallow.Text).Selectable()
 }
