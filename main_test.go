@@ -759,6 +759,58 @@ func TestHome(t *testing.T) {
 		t.Errorf("the model is told of the clash: %q", last.Text)
 	}
 
+	// A task is changed, checked off and deleted by its ID, which the
+	// model is told; one there is not is said to be missing.
+	bill := tasks.Tasks()[0]
+	for _, k := range tasks.Tasks() {
+		if k.Title == "交水电费" {
+			bill = k
+		}
+	}
+	if !strings.Contains(asked[0].System, fmt.Sprintf("[%d] ", bill.ID)) {
+		t.Errorf("the model is not told the task's ID: %s", asked[0].System)
+	}
+	answers = append(answers,
+		llm.Message{Role: llm.Assistant, Calls: []llm.Call{
+			call("c4", "update_task", fmt.Sprintf(`{"id":%d,"title":"交电费","due":"2030-02-03"}`, bill.ID)),
+			call("c5", "update_task", `{"id":9999,"done":true}`),
+		}},
+		llm.Message{Role: llm.Assistant, Text: "改好了。"},
+		llm.Message{Role: llm.Assistant, Calls: []llm.Call{call("c6", "update_task", fmt.Sprintf(`{"id":%d,"done":true}`, bill.ID))}},
+		llm.Message{Role: llm.Assistant, Text: "标好了。"},
+		llm.Message{Role: llm.Assistant, Calls: []llm.Call{call("c7", "delete_task", fmt.Sprintf(`{"id":%d}`, bill.ID))}},
+		llm.Message{Role: llm.Assistant, Text: "删掉了。"})
+	say := func(text string) {
+		t.Helper()
+		click(t, tt, "给助手的话")
+		tt.Type(text)
+		tt.Key(0, ui.KeyEnter)
+		tt.Frame()
+	}
+	say("水电费改成电费，2030年2月3日交")
+	if bill.Title != "交电费" || bill.Due != "2030-02-03" || bill.Done {
+		t.Fatalf("the task after update_task: %+v", bill)
+	}
+	if got := asked[len(asked)-1].Messages; !strings.Contains(got[len(got)-2].Text, "已修改") || !strings.Contains(got[len(got)-1].Text, "没有 id 是 9999 的任务") {
+		t.Errorf("the model is told of the changes: %+v", got[len(got)-2:])
+	}
+	if !tt.HasText("已修改任务：交水电费 · 改名为“交电费”，改到2月3日 周日") {
+		t.Errorf("the change does not show: %q", tt.Texts())
+	}
+	say("电费交了")
+	if !bill.Done || !tt.HasText("已修改任务：交电费 · 标为完成") {
+		t.Fatalf("after checking off: %+v, %q", bill, tt.Texts())
+	}
+	// A turn that changed something is not asked for again.
+	if h.CanRegenerate() {
+		t.Errorf("a turn that changed a task can be regenerated")
+	}
+	n0 := len(tasks.Tasks())
+	say("把电费那条删了")
+	if len(tasks.Tasks()) != n0-1 || tasks.Task(bill.ID) != nil || !tt.HasText("已删除任务：交电费") {
+		t.Fatalf("after delete_task: %d tasks, %q", len(tasks.Tasks()), tt.Texts())
+	}
+
 	// What goes wrong shows, and the field takes the next message.
 	click(t, tt, "给助手的话")
 	tt.Type("再试一次")

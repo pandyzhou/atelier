@@ -386,6 +386,25 @@ var tools = []llm.Tool{
 		}),
 	},
 	{
+		Name:        "update_task",
+		Description: "修改一条已有的任务，或把它标为完成、未完成。只填要改的字段，没填的保持原样。id 是任务前面方括号里的数字。",
+		Parameters: schema([]string{"id"}, map[string]any{
+			"id":     prop("integer", "任务的 id"),
+			"title":  prop("string", "新的标题"),
+			"due":    prop("string", "新的到期日期，YYYY-MM-DD；填空字符串表示去掉日期"),
+			"note":   prop("string", "新的备注；填空字符串表示清空"),
+			"repeat": map[string]any{"type": "string", "enum": []string{"", "daily", "weekly", "monthly"}, "description": "新的重复方式；填空字符串表示不再重复"},
+			"done":   prop("boolean", "true 标为完成，false 标为未完成"),
+		}),
+	},
+	{
+		Name:        "delete_task",
+		Description: "删除一条任务，删了不能恢复。只在用户明确要求删除时使用；说不清是哪一条时先问。id 是任务前面方括号里的数字。",
+		Parameters: schema([]string{"id"}, map[string]any{
+			"id": prop("integer", "任务的 id"),
+		}),
+	},
+	{
 		Name:        "add_course",
 		Description: "往课表里添加一门课。课表每周相同。和已有课程冲突时会失败并说明原因。",
 		Parameters: schema([]string{"name", "weekday", "from_period", "to_period"}, map[string]any{
@@ -447,6 +466,84 @@ func (h *Home) call(c llm.Call) string {
 		}
 		did(note)
 		return fmt.Sprintf("已添加，id %d，到期 %s", k.ID, orNone(k.Due))
+	case "update_task":
+		var in struct {
+			ID                       int
+			Title, Due, Note, Repeat *string
+			Done                     *bool
+		}
+		if err := json.Unmarshal(c.Input, &in); err != nil {
+			return "参数不对：" + err.Error()
+		}
+		k := h.tasks.Task(in.ID)
+		if k == nil {
+			return fmt.Sprintf("没有 id 是 %d 的任务", in.ID)
+		}
+		if in.Title != nil && strings.TrimSpace(*in.Title) == "" {
+			return "没有修改：标题不能是空的"
+		}
+		if in.Due != nil && *in.Due != "" {
+			if _, err := time.Parse(dateLayout, *in.Due); err != nil {
+				return "due 要写成 YYYY-MM-DD"
+			}
+		}
+		if in.Repeat != nil {
+			switch *in.Repeat {
+			case todo.RepeatNone, todo.RepeatDaily, todo.RepeatWeekly, todo.RepeatMonthly:
+			default:
+				return "repeat 只能是 daily、weekly、monthly 或空字符串"
+			}
+		}
+		was := k.Title
+		var changes []string
+		if in.Title != nil && strings.TrimSpace(*in.Title) != k.Title {
+			k.Title = strings.TrimSpace(*in.Title)
+			changes = append(changes, "改名为“"+k.Title+"”")
+		}
+		if in.Due != nil && *in.Due != k.Due {
+			if k.Due = *in.Due; k.Due == "" {
+				changes = append(changes, "去掉日期")
+			} else {
+				changes = append(changes, "改到"+h.dayOf(k.Due))
+			}
+		}
+		if in.Note != nil && strings.TrimSpace(*in.Note) != k.Note {
+			k.Note = strings.TrimSpace(*in.Note)
+			changes = append(changes, "改了备注")
+		}
+		if in.Repeat != nil && *in.Repeat != k.Repeat {
+			k.Repeat = *in.Repeat
+			changes = append(changes, "改了重复")
+		}
+		if len(changes) > 0 {
+			h.tasks.Changed(k)
+		}
+		if in.Done != nil && *in.Done != k.Done {
+			h.tasks.SetDone(k, *in.Done)
+			if *in.Done {
+				changes = append(changes, "标为完成")
+			} else {
+				changes = append(changes, "标为未完成")
+			}
+		}
+		if len(changes) == 0 {
+			return "没有要改的：任务已经是这样了"
+		}
+		did("已修改任务：" + was + " · " + strings.Join(changes, "，"))
+		return "已修改，现在是：" + h.taskLine(k)
+	case "delete_task":
+		var in struct{ ID int }
+		if err := json.Unmarshal(c.Input, &in); err != nil {
+			return "参数不对：" + err.Error()
+		}
+		k := h.tasks.Task(in.ID)
+		if k == nil {
+			return fmt.Sprintf("没有 id 是 %d 的任务", in.ID)
+		}
+		name := k.Title
+		h.tasks.Remove(k)
+		did("已删除任务：" + name)
+		return "已删除"
 	case "add_course":
 		var in struct {
 			Name, Room, Teacher string
@@ -526,9 +623,11 @@ func (h *Home) dayOf(date string) string {
 	return fmt.Sprintf("%d月%d日 %s", int(d.Month()), d.Day(), weekday(date))
 }
 
-// taskLine writes a task for the model, on a line.
+// taskLine writes a task for the model, on a line: its ID first, by which
+// the model says which task it means.
 func (h *Home) taskLine(k *todo.Task) string {
 	var b strings.Builder
+	fmt.Fprintf(&b, "[%d] ", k.ID)
 	if k.Due == "" {
 		b.WriteString("无日期")
 	} else {
@@ -570,7 +669,9 @@ func (h *Home) system() string {
 - 问某天的安排时，把那天的课和到期的任务都说出来。
 - 添加前信息不全（比如课程没说星期几、第几节）就先问清楚，不要猜。
 - 添加成功后用一句话确认。工具说失败时，把原因告诉用户。
-- 你只能查看和添加。用户要修改、完成或删除时，请他到“待办”或“课表”页面操作。
+- 任务可以修改、标为完成和删除，用任务前面方括号里的 id 指明是哪一条；回答用户时不要提 id。
+- 删除不能恢复：只在用户明确说要删时才删，指不清是哪一条、或者一次要删好几条时，先列出来问清楚。
+- 课表里的课程只能查看和添加。用户要修改或删除课程时，请他到“课表”页面操作。
 `)
 	periods := h.table.Periods()
 	fmt.Fprintf(&b, "\n课表（每周相同，每天 %d 节）：\n", len(periods))
