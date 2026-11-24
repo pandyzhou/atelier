@@ -14,6 +14,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/pandyzhou/atelier/internal/features/timetable"
 	"github.com/pandyzhou/atelier/internal/features/todo"
 	"github.com/pandyzhou/atelier/internal/llm"
 	"github.com/pandyzhou/atelier/internal/store"
@@ -500,6 +501,110 @@ func TestTodoFold(t *testing.T) {
 	}
 }
 
+// The timetable stands between the to-do list and the calendar. A right
+// click on a period of a day adds a course there, over the periods chosen;
+// it shows on the grid, opens to be changed, and cannot take the periods of
+// another. The day's periods and their times are set in a dialog.
+func TestTimetable(t *testing.T) {
+	dir := t.TempDir()
+	a := newApp(store.Open(dir))
+	a.win = &fakeWindow{}
+	tt := ui.NewTester(a.view, 1280, 800)
+	var titles []string
+	for _, f := range a.features {
+		titles = append(titles, f.Title())
+	}
+	if !slices.Equal(titles, []string{"待办", "课表", "月历"}) {
+		t.Fatalf("the features are %q", titles)
+	}
+	click(t, tt, "课表")
+	tb := a.current().(*timetable.Timetable)
+	if len(tb.Periods()) != 10 || len(tb.Courses()) != 0 {
+		t.Fatalf("a new timetable has %d periods and %d courses", len(tb.Periods()), len(tb.Courses()))
+	}
+
+	rightClick(t, tt, "周三第3节")
+	click(t, tt, "新课程")
+	if !tt.HasText("第 3 节") {
+		t.Fatalf("the dialog is not on the period clicked: %q", tt.Texts())
+	}
+	tt.Type("高等数学")
+	click(t, tt, "上课地点")
+	tt.Type("A301")
+	click(t, tt, "第4节", "添加")
+	if len(tb.Courses()) != 1 {
+		t.Fatalf("after adding: %d courses (texts %q)", len(tb.Courses()), tt.Texts())
+	}
+	if k := tb.Courses()[0]; k.Name != "高等数学" || k.Room != "A301" || k.Day != 2 || k.From != 3 || k.To != 4 {
+		t.Fatalf("the course added: %+v", k)
+	}
+	if !tt.HasText("高等数学") || !tt.HasText("A301") || tt.HasText("编辑课程") {
+		t.Fatalf("the course does not show on the grid: %q", tt.Texts())
+	}
+	// It is two rows high.
+	one, _ := tt.Find("周三第3节")
+	block, ok := tt.Find("打开高等数学")
+	if !ok || block.H < one.H*1.5 || block.H > one.H*2 || block.Y < one.Y {
+		t.Errorf("the course is at %+v, a period at %+v", block, one)
+	}
+
+	// Another course cannot take its periods.
+	rightClick(t, tt, "周三第5节")
+	click(t, tt, "新课程")
+	tt.Type("英语")
+	click(t, tt, "第4节", "添加")
+	if len(tb.Courses()) != 1 || !tt.HasText("已经有“高等数学”了") {
+		t.Fatalf("a clashing course: %d courses, %q", len(tb.Courses()), tt.Texts())
+	}
+	// Chosen anew, on a period that is free, it is added.
+	click(t, tt, "第5节", "添加")
+	if len(tb.Courses()) != 2 || tb.Courses()[1].From != 5 || tb.Courses()[1].To != 5 {
+		t.Fatalf("after choosing a free period: %+v", tb.Courses())
+	}
+
+	// A click opens a course to change it, another day too.
+	click(t, tt, "打开英语", "周五", "保存")
+	if k := tb.Courses()[1]; k.Name != "英语" || k.Day != 4 {
+		t.Fatalf("after moving 英语 to Friday: %+v", k)
+	}
+	// Its menu deletes it.
+	rightClick(t, tt, "打开英语")
+	click(t, tt, "删除课程")
+	if len(tb.Courses()) != 1 {
+		t.Fatalf("after deleting: %+v", tb.Courses())
+	}
+
+	// The periods: more of them, times for them, and never fewer than the
+	// courses go to.
+	click(t, tt, "节次时间", "增加一节", "第3节开始")
+	tt.Type("10:00")
+	click(t, tt, "第4节结束")
+	tt.Type("11:40")
+	click(t, tt, "完成")
+	if len(tb.Periods()) != 11 || tb.Periods()[2].Start != "10:00" || !tt.HasText("10:00") {
+		t.Fatalf("the periods: %+v, texts %q", tb.Periods(), tt.Texts())
+	}
+	click(t, tt, "打开高等数学")
+	if !tt.HasText("10:00–11:40") {
+		t.Errorf("the course's dialog does not say its time: %q", tt.Texts())
+	}
+	click(t, tt, "取消")
+	tb.SetPeriods(1)
+	if len(tb.Periods()) != 4 {
+		t.Errorf("with a course to the 4th period, the periods can be made %d", len(tb.Periods()))
+	}
+
+	// After a restart it is all there.
+	b := newApp(store.Open(dir))
+	for _, f := range b.features {
+		if again, ok := f.(*timetable.Timetable); ok {
+			if len(again.Courses()) != 1 || again.Courses()[0].Name != "高等数学" || again.Periods()[2].Start != "10:00" {
+				t.Errorf("after restarting: %+v, %+v", again.Courses(), again.Periods())
+			}
+		}
+	}
+}
+
 // TestScreenshot renders the window without opening it and writes a PNG to
 // the path in ATELIER_SCREENSHOT, to look at the UI from scripts:
 //
@@ -538,6 +643,24 @@ func TestScreenshot(t *testing.T) {
 		d.Add(k)
 	}
 	d.SetDone(d.Add(todo.Task{Title: "预约体检", Due: day(0)}), true)
+	for _, f := range a.features {
+		tb, ok := f.(*timetable.Timetable)
+		if !ok {
+			continue
+		}
+		for _, k := range []timetable.Course{
+			{Name: "高等数学", Room: "A301", Teacher: "王老师", Day: 0, From: 1, To: 2},
+			{Name: "大学英语", Room: "B102", Day: 0, From: 5, To: 6},
+			{Name: "数据结构与算法分析", Room: "计算机楼 204", Teacher: "李老师", Day: 1, From: 3, To: 4},
+			{Name: "体育", Day: 2, From: 7, To: 7},
+			{Name: "线性代数", Room: "A105", Day: 3, From: 1, To: 3},
+			{Name: "实验", Room: "实验楼", Day: 4, From: 5, To: 8},
+		} {
+			if _, err := tb.Put(k); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	tt := ui.NewTester(a.view, 1280, 800)
 	// ATELIER_SCREENSHOT_SIZE is the window's size, as 860x520.
 	var w, h int
@@ -701,7 +824,14 @@ func TestFontsKeepLayout(t *testing.T) {
 		return out
 	}
 	fonts := 0
-	for _, page := range []string{"待办", "月历", "设置"} {
+	for _, f := range a.features {
+		if tb, ok := f.(*timetable.Timetable); ok {
+			if _, err := tb.Put(timetable.Course{Name: "高等数学", Room: "A301", Teacher: "王老师", Day: 1, From: 1, To: 2}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, page := range []string{"待办", "课表", "月历", "设置"} {
 		click(t, st, page)
 		for _, s := range sizes {
 			fonts += steady(t, a, s.id, page, func() map[string]place { return places(st) })

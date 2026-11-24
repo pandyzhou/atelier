@@ -14,6 +14,7 @@ import (
 	"github.com/pandyzhou/mallow"
 
 	"github.com/pandyzhou/atelier/internal/feature"
+	"github.com/pandyzhou/atelier/internal/features/timetable"
 	"github.com/pandyzhou/atelier/internal/features/todo"
 	"github.com/pandyzhou/atelier/internal/llm"
 	"github.com/pandyzhou/atelier/internal/secret"
@@ -25,6 +26,7 @@ func features(s *store.Store) []feature.Feature {
 	tasks := todo.New(s)
 	return []feature.Feature{
 		tasks,
+		timetable.New(s),
 		tasks.Calendar(),
 	}
 }
