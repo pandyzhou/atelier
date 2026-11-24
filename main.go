@@ -449,11 +449,18 @@ func (a *app) aboutSettings(c *ui.Context, row func(name, note string, width flo
 }
 
 func main() {
+	// One Atelier at a time: started again while it runs, as from the Start
+	// menu with its window hidden in the notification area, it brings that
+	// window back instead. Two would also write the same files.
+	if !mygo.App.RequestSingleInstanceLock() {
+		return
+	}
 	dir, err := mygo.App.Path(mygo.PathUserData)
 	if err != nil {
 		log.Printf("no data directory, nothing will be saved: %v", err)
 	}
 	a := newApp(store.Open(dir))
+	mygo.App.OnSecondInstance(func([]string, string) { a.showWindow() })
 	mygo.App.WhenReady(func() {
 		win := mygo.NewWindow(mygo.WindowOptions{
 			Title:     "Atelier",

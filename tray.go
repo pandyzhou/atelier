@@ -45,6 +45,21 @@ func (a *app) watchWindow(win *mygo.Window) {
 	a.syncTray()
 }
 
+// showWindow brings the window back to the front, from the notification
+// area or from the taskbar: for a click on the icon, and for the app being
+// started again while it runs.
+func (a *app) showWindow() {
+	win := a.tray.win
+	if win == nil {
+		return // not made yet
+	}
+	if win.IsMinimized() {
+		win.Restore()
+	}
+	win.Show()
+	win.Focus()
+}
+
 // syncTray shows the icon in the notification area while closing the window
 // keeps the app there, and takes it away otherwise.
 func (a *app) syncTray() {
@@ -68,13 +83,7 @@ func (a *app) syncTray() {
 		return
 	}
 	t.tray = tray
-	show := func() {
-		if t.win.IsMinimized() {
-			t.win.Restore()
-		}
-		t.win.Show()
-		t.win.Focus()
-	}
+	show := a.showWindow
 	// A click brings the window back; the menu comes for the other button
 	// alone: an icon with a menu set shows it for every click.
 	tray.OnClick(show)
