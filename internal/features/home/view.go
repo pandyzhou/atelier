@@ -36,6 +36,11 @@ type viewState struct {
 	thinking  time.Time
 	opened    map[int]bool
 	efforting bool
+	// zoomed is whether a picture of the conversation shows large, zoom
+	// that picture, and zoomLabel its name.
+	zoomed    bool
+	zoom      ui.ImageSource
+	zoomLabel string
 	asking    *asking    // the deletion that waits for the user's word
 	reading   []llm.Call // the calls still to answer while one reads from the network
 	listed    string     // the timetable and the tasks as the model was last told them
@@ -81,6 +86,9 @@ func (h *Home) View(c *ui.Context) {
 						h.conversation(c)
 					}
 				})
+				if h.ui.zoomed {
+					mallow.Lightbox(c, &h.ui.zoomed, h.ui.zoom, h.ui.zoomLabel)
+				}
 			})
 		})
 	})
@@ -366,9 +374,19 @@ func (h *Home) files(c *ui.Context, files []attached) {
 			continue
 		}
 		scale := min(pictureWidth/w, pictureHeight/ht, 1)
-		ui.Box(c.Key(fmt.Sprint("picture:", i))).Size(w*scale, ht*scale).Shrink(0).Radius(mallow.RadiusSmall).Clip().Label("图片：" + f.Name).Children(func() {
+		// A click shows it large: as it was sent, not as small as here.
+		shown := ui.ButtonBase(c.Key(fmt.Sprint("picture:", i))).Size(w*scale, ht*scale).Shrink(0).Radius(mallow.RadiusSmall).Clip().
+			Label("图片：" + f.Name).Cursor(ui.CursorPointer)
+		shown.Children(func() {
 			ui.Image(c, b).Size(w*scale, ht*scale)
 		})
+		if shown.Clicked() {
+			h.ui.zoom, h.ui.zoomLabel = b, f.Name
+			if whole, err := ui.DecodeBitmap(h.blob(f.Image)); err == nil {
+				h.ui.zoom = whole
+			}
+			h.ui.zoomed = true
+		}
 	}
 	for i, f := range files {
 		switch {

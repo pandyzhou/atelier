@@ -19,7 +19,9 @@ type viewState struct {
 	// are the READMEs read, by repository, and doc what shows one.
 	open    string
 	readmes map[string]*readme
-	doc     mallow.Document
+	// docs are what show the READMEs, one for a repository: each holds
+	// the pictures it loaded, by addresses that are the README's own.
+	docs map[string]*mallow.Document
 	// translating is the translation under way, nil for none, and runs
 	// counts those begun; original is whether the README shows as it was
 	// written though there is a translation of it; translateProblem is why
@@ -257,8 +259,16 @@ func (t *Trending) page(c *ui.Context, r Repo) {
 	// its links go to the browser: to the repository's pages on GitHub
 	// when they are written as paths within it.
 	file := about.file
-	t.ui.doc.LoadImage = func(address string) (ui.ImageSource, error) { return t.loadPicture(r.Name, file, address) }
-	t.ui.doc.OnLink = func(address string) {
+	if t.ui.docs == nil {
+		t.ui.docs = map[string]*mallow.Document{}
+	}
+	doc := t.ui.docs[r.Name]
+	if doc == nil {
+		doc = &mallow.Document{}
+		t.ui.docs[r.Name] = doc
+	}
+	doc.LoadImage = func(address string) (ui.ImageSource, error) { return t.loadPicture(r.Name, file, address) }
+	doc.OnLink = func(address string) {
 		if strings.HasPrefix(address, "#") {
 			return
 		}
@@ -272,12 +282,12 @@ func (t *Trending) page(c *ui.Context, r Repo) {
 			ui.Column(c).Grow(1).MinWidth(0).MaxWidth(860).Gap(12).Children(func() {
 				for i, p := range t.showing(r.Name, about) {
 					if !p.centered {
-						t.ui.doc.View(c.Key(i), p.text)
+						doc.View(c.Key(i), p.text)
 						continue
 					}
 					// In the middle, as its README has it.
 					ui.Column(c.Key(i)).AlignItems(ui.Center).TextAlign(ui.Center).Children(func() {
-						t.ui.doc.View(c, p.text)
+						doc.View(c, p.text)
 					})
 				}
 			})

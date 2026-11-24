@@ -1272,6 +1272,10 @@ func TestScreenshot(t *testing.T) {
 			tt.Frame()
 		}
 	}
+	// ATELIER_SCREENSHOT_THEN is clicked last, after what loads has.
+	if s := os.Getenv("ATELIER_SCREENSHOT_THEN"); s != "" {
+		click(t, tt, s)
+	}
 	// Let the 200 ms transitions finish before taking the picture.
 	tt.Advance(time.Second)
 	f, err := os.Create(path)
@@ -1921,6 +1925,18 @@ func TestAttachments(t *testing.T) {
 	// and the field is clear of them.
 	if !tt.HasText("图片：照片.png") || !tt.HasText("笔记.txt") || tt.HasText("周三交报告") || tt.HasText("移除附件") || tt.HasText("程序.exe") {
 		t.Errorf("the message shows as %q", tt.Texts())
+	}
+	// A click on the picture shows it large, and one on that shuts it.
+	click(t, tt, "图片：照片.png")
+	tt.Advance(time.Second)
+	small, _ := tt.Find("图片：照片.png")
+	if large, ok := tt.Find("关闭大图"); !ok || large.W <= small.W {
+		t.Fatalf("the picture shown large is %v, and %v in the conversation", large, small)
+	}
+	click(t, tt, "关闭大图")
+	tt.Advance(time.Second)
+	if _, ok := tt.Find("关闭大图"); ok {
+		t.Fatalf("the picture still shows large: %q", tt.Texts())
 	}
 	if names := saved(); len(names) != 1 || names[0] != first.Images[0].Name {
 		t.Errorf("the pictures kept: %q, the one sent %q", names, first.Images[0].Name)
