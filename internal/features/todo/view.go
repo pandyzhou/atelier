@@ -64,7 +64,7 @@ func (t *Todo) View(c *ui.Context) {
 	})
 }
 
-// nav lists the views and the inbox, then the user's lists, where one is
+// nav lists the views, then the lists, the inbox first, where one is
 // added, then what is done: each with how many tasks it has still to do.
 func (t *Todo) nav(c *ui.Context) {
 	item := func(view, label string, glyph func(*ui.Context, ui.Color)) mallow.Item {
@@ -80,7 +80,6 @@ func (t *Todo) nav(c *ui.Context) {
 			item(viewNext7, "最近 7 天", mallow.GlyphCalendar),
 			item(viewWeek, "按周", mallow.GlyphCalendar),
 			item(viewAll, "全部", mallow.GlyphList),
-			item(listView(Inbox), "收集箱", mallow.GlyphInbox),
 		})
 		mallow.Groove(c).MarginX(4)
 		// The + beside the heading brings the new list's field, which goes
@@ -91,14 +90,15 @@ func (t *Todo) nav(c *ui.Context) {
 				t.ui.addingList, t.ui.focus = true, focusNewList
 			}
 		})
-		if len(t.data.Lists) > 0 {
-			lists := make([]mallow.Item, len(t.data.Lists))
-			for i, l := range t.data.Lists {
-				lists[i] = item(listView(l.ID), l.Name, mallow.GlyphList)
-				lists[i].With = func(c *ui.Context, entry ui.Element) { t.listMenu(c, entry, l.ID) }
-			}
-			mallow.SourceList(c, "清单", &t.ui.view, lists)
+		// The inbox is the first of the lists: the one that is always
+		// there, for what has no other, and cannot be renamed or deleted.
+		lists := []mallow.Item{item(listView(Inbox), "收集箱", mallow.GlyphInbox)}
+		for _, l := range t.data.Lists {
+			it := item(listView(l.ID), l.Name, mallow.GlyphList)
+			it.With = func(c *ui.Context, entry ui.Element) { t.listMenu(c, entry, l.ID) }
+			lists = append(lists, it)
 		}
+		mallow.SourceList(c, "清单", &t.ui.view, lists)
 		if t.ui.addingList {
 			input := mallow.TextInput(c, &t.ui.listDraft).Placeholder("清单的名字，回车确认").Label("清单的名字").
 				Margin(0, 8).FocusBind(&t.ui.focus, focusNewList)
