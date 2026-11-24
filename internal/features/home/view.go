@@ -37,6 +37,7 @@ type viewState struct {
 	opened    map[int]bool
 	efforting bool
 	asking    *asking   // the deletion that waits for the user's word
+	listed    string    // the timetable and the tasks as the model was last told them
 	pending   []pending // the files to send with the next message
 	loading   int       // how many more of them are being read
 	note      string    // what could not be attached, and why

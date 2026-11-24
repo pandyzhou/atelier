@@ -57,6 +57,17 @@ func click(t *testing.T, tt *ui.Tester, labels ...string) {
 	}
 }
 
+// told is all a request tells the model besides what was said: the system
+// prompt, and what the user's messages are sent after, the time and the
+// user's data as they were then.
+func told(r llm.Request) string {
+	all := r.System
+	for _, m := range r.Messages {
+		all += "\n" + m.Context
+	}
+	return all
+}
+
 // shown is how many of the last frame's texts are text and nothing more: an
 // element shows twice among them, as its label and as what it writes.
 // Tester.HasText finds text within longer ones too.
@@ -753,7 +764,7 @@ func TestHome(t *testing.T) {
 		t.Fatalf("the model was asked %d times (texts %q)", len(asked), tt.Texts())
 	}
 	// The model is told what there is, and what it can do.
-	if sys := asked[0].System; !strings.Contains(sys, "交水电费") || !strings.Contains(sys, tasks.Today()) {
+	if sys := told(asked[0]); !strings.Contains(sys, "交水电费") || !strings.Contains(sys, tasks.Today()) {
 		t.Errorf("the model is not told the tasks and the day: %s", sys)
 	}
 	if len(asked[0].Tools) < 2 || len(asked[0].Messages) != 1 || asked[0].Messages[0].Text == "" {
@@ -771,8 +782,10 @@ func TestHome(t *testing.T) {
 		t.Fatalf("the second request's messages: %+v", ms)
 	}
 	// The second request tells the model of the course there is now.
-	if !strings.Contains(asked[1].System, "高等数学") {
-		t.Errorf("the model is not told the course it added: %s", asked[1].System)
+	// What it had done it is told by the tools' results; what it was sent
+	// before stays as it was.
+	if got := asked[1].Messages; asked[1].System != asked[0].System || got[0].Context != asked[0].Messages[0].Context || !strings.Contains(got[len(got)-1].Text, "已添加") {
+		t.Errorf("the second request: %+v", got)
 	}
 	if len(growing) != 1 || !strings.Contains(growing[0], "都加") || strings.Contains(growing[0], "都加好了") || strings.Contains(growing[0], "正在想") {
 		t.Errorf("as the answer came, the page showed %q", growing)
@@ -809,8 +822,8 @@ func TestHome(t *testing.T) {
 			bill = k
 		}
 	}
-	if !strings.Contains(asked[0].System, fmt.Sprintf("[%d] ", bill.ID)) {
-		t.Errorf("the model is not told the task's ID: %s", asked[0].System)
+	if !strings.Contains(told(asked[0]), fmt.Sprintf("[%d] ", bill.ID)) {
+		t.Errorf("the model is not told the task's ID: %s", told(asked[0]))
 	}
 	answers = append(answers,
 		llm.Message{Role: llm.Assistant, Calls: []llm.Call{
@@ -891,8 +904,8 @@ func TestHome(t *testing.T) {
 		llm.Message{Role: llm.Assistant, Calls: []llm.Call{call("c11", "delete_course", fmt.Sprintf(`{"id":%d}`, math.ID))}},
 		llm.Message{Role: llm.Assistant, Text: "删掉了。"})
 	say("高数改到周四五六节，在 B202")
-	if !strings.Contains(asked[len(asked)-2].System, fmt.Sprintf("[%d] 周三 第 3–4 节 高等数学", math.ID)) {
-		t.Errorf("the model is not told the course's ID: %s", asked[len(asked)-2].System)
+	if !strings.Contains(told(asked[len(asked)-2]), fmt.Sprintf("[%d] 周三 第 3–4 节 高等数学", math.ID)) {
+		t.Errorf("the model is not told the course's ID: %s", told(asked[len(asked)-2]))
 	}
 	if k := table.Course(math.ID); k == nil || k.Name != "高数" || k.Day != 3 || k.From != 5 || k.To != 6 || k.Room != "B202" {
 		t.Fatalf("the course after update_course: %+v", k)
@@ -943,8 +956,8 @@ func TestHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	say("每天十二节，第一节八点二十到九点，第十二节晚上八点到八点四十")
-	if !strings.Contains(asked[len(asked)-2].System, "每天 10 节课") || !strings.Contains(asked[len(asked)-2].System, "第 1 节 没有设时间") {
-		t.Errorf("the model is not told the periods: %s", asked[len(asked)-2].System)
+	if !strings.Contains(told(asked[len(asked)-2]), "每天 10 节课") || !strings.Contains(told(asked[len(asked)-2]), "第 1 节 没有设时间") {
+		t.Errorf("the model is not told the periods: %s", told(asked[len(asked)-2]))
 	}
 	if p := table.Periods(); len(p) != 12 || p[0] != (timetable.Period{Start: "08:20", End: "09:00"}) || p[11] != (timetable.Period{Start: "20:00", End: "20:40"}) || p[1] != (timetable.Period{}) {
 		t.Fatalf("the periods after set_periods: %+v", p)
@@ -958,8 +971,32 @@ func TestHome(t *testing.T) {
 	if !tt.HasText("已设置节次：每天 12 节，改了 2 节的时间") {
 		t.Errorf("the periods' change does not show: %q", tt.Texts())
 	}
-	if !strings.Contains(asked[len(asked)-1].System, "每天 12 节课") {
-		t.Errorf("the model is not told the new periods: %s", asked[len(asked)-1].System)
+	// The next message tells the model the periods as they are now; what
+	// does not change from one request to the next is the system prompt,
+	// which has neither the time nor the user's data in it.
+	answers = append(answers, llm.Message{Role: llm.Assistant, Text: "记下了。"})
+	say("谢谢")
+	latest := asked[len(asked)-1]
+	if at := latest.Messages[len(latest.Messages)-1]; !strings.Contains(at.Context, "每天 12 节课") || !strings.Contains(at.Context, "现在是 ") || at.Text != "谢谢" {
+		t.Errorf("the next message is sent after %q", at.Context)
+	}
+	if latest.System != asked[0].System || strings.Contains(latest.System, "现在是") || strings.Contains(latest.System, "每天 12 节课") || strings.Contains(latest.System, "交水电费") {
+		t.Errorf("the system prompt changes, or has the user's data: %s", latest.System)
+	}
+	// What was sent before is sent again as it was: the earlier messages
+	// keep what they were sent after.
+	for i, m := range asked[0].Messages {
+		if got := latest.Messages[i]; got.Context != m.Context || got.Text != m.Text {
+			t.Errorf("message %d was sent after %q, and is now after %q", i, m.Context, got.Context)
+		}
+	}
+	// With nothing changed since, the timetable and the tasks are not
+	// told again, only the time.
+	answers = append(answers, llm.Message{Role: llm.Assistant, Text: "回见。"})
+	say("再见")
+	latest = asked[len(asked)-1]
+	if at := latest.Messages[len(latest.Messages)-1].Context; strings.Contains(at, "每天 12 节课") || !strings.Contains(at, "和上一条消息时一样") || !strings.Contains(at, "现在是 ") {
+		t.Errorf("with nothing changed, the message is sent after %q", at)
 	}
 
 	// What goes wrong shows, and the field takes the next message.

@@ -57,6 +57,11 @@ type Message struct {
 	// Images are the pictures a user's message comes with; one without
 	// Data is left out of what is sent.
 	Images []Image
+	// Context is what a user's message is sent after: what the app knew
+	// as it was written, as the time and the user's data then. It stays
+	// with the message, so that what was sent before it is sent again the
+	// same, which services that keep what they have read count on.
+	Context string
 	// Thinking is what the model thought before an assistant's message,
 	// as far as its service tells: to show, not to send back.
 	Thinking string
@@ -78,6 +83,7 @@ type savedMessage struct {
 	Text   string          `json:"text,omitempty"`
 	Images []Image         `json:"images,omitempty"`
 	Think  string          `json:"thinking,omitempty"`
+	Before string          `json:"context,omitempty"`
 	Calls  []Call          `json:"calls,omitempty"`
 	CallID string          `json:"callId,omitempty"`
 	Raw    json.RawMessage `json:"raw,omitempty"`
@@ -86,7 +92,7 @@ type savedMessage struct {
 
 // MarshalJSON writes a message to be saved and gone on with later.
 func (m Message) MarshalJSON() ([]byte, error) {
-	return json.Marshal(savedMessage{m.Role, m.Text, m.Images, m.Thinking, m.Calls, m.CallID, m.raw, m.kind})
+	return json.Marshal(savedMessage{m.Role, m.Text, m.Images, m.Thinking, m.Context, m.Calls, m.CallID, m.raw, m.kind})
 }
 
 // UnmarshalJSON reads a message MarshalJSON wrote.
@@ -95,7 +101,7 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &v); err != nil {
 		return err
 	}
-	*m = Message{Role: v.Role, Text: v.Text, Images: v.Images, Thinking: v.Think, Calls: v.Calls, CallID: v.CallID, raw: v.Raw, kind: v.Kind}
+	*m = Message{Role: v.Role, Text: v.Text, Images: v.Images, Thinking: v.Think, Context: v.Before, Calls: v.Calls, CallID: v.CallID, raw: v.Raw, kind: v.Kind}
 	return nil
 }
 
@@ -250,6 +256,11 @@ func object(input json.RawMessage) json.RawMessage {
 // said is the content of a user's message: its text alone when it has no
 // pictures to send, else the parts picture and text make of them.
 func said(m Message, picture func(Image) map[string]any, text func(string) map[string]any) any {
+	// What it is sent after, then what it says.
+	whole := m.Text
+	if m.Context != "" {
+		whole = strings.TrimSpace(m.Context + "\n\n" + m.Text)
+	}
 	var parts []map[string]any
 	for _, i := range m.Images {
 		if len(i.Data) > 0 {
@@ -257,12 +268,32 @@ func said(m Message, picture func(Image) map[string]any, text func(string) map[s
 		}
 	}
 	if len(parts) == 0 {
-		return m.Text
+		return whole
 	}
-	if m.Text != "" {
-		parts = append(parts, text(m.Text))
+	if whole != "" {
+		parts = append(parts, text(whole))
 	}
 	return parts
+}
+
+// kept marks, in a request to Anthropic's models, where what was sent so
+// far ends: the service keeps what it read up to there for some minutes,
+// and reads it again from what it kept, sooner and for less.
+var kept = map[string]any{"type": "ephemeral"}
+
+// keep marks the end of a message's content for the service to keep what
+// it read up to it.
+func keep(message map[string]any) {
+	switch content := message["content"].(type) {
+	case string:
+		if content != "" {
+			message["content"] = []map[string]any{{"type": "text", "text": content, "cache_control": kept}}
+		}
+	case []map[string]any:
+		if len(content) > 0 {
+			content[len(content)-1]["cache_control"] = kept
+		}
+	}
 }
 
 // Anthropic's Messages API.
@@ -304,7 +335,19 @@ func anthropicRequest(c Config, r Request) map[string]any {
 		}
 	}
 	body := map[string]any{"model": c.Model, "max_tokens": maxAnswer, "messages": messages}
-	if r.System != "" {
+	// Anthropic's own models keep what they are told to: the tools and the
+	// system prompt, which are the same in every request, and the
+	// conversation up to its end, which the next request goes on from.
+	// Other services that take such requests are told nothing of it.
+	keeps := strings.Contains(strings.ToLower(c.Model), "claude")
+	if keeps && len(messages) > 0 {
+		keep(messages[len(messages)-1])
+	}
+	switch {
+	case r.System == "":
+	case keeps:
+		body["system"] = []map[string]any{{"type": "text", "text": r.System, "cache_control": kept}}
+	default:
 		body["system"] = r.System
 	}
 	if len(r.Tools) > 0 {

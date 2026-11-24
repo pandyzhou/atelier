@@ -138,7 +138,7 @@ func (h *Home) Send(text string) {
 		return
 	}
 	// A picture goes as one; a file of text, in the text the model is sent.
-	e, m := entry{Kind: said, Text: text}, llm.Message{Role: llm.User}
+	e, m := entry{Kind: said, Text: text}, llm.Message{Role: llm.User, Context: h.context()}
 	var b strings.Builder
 	b.WriteString(text)
 	for _, p := range h.ui.pending {
@@ -1042,13 +1042,13 @@ func (h *Home) courseLine(k *timetable.Course) string {
 // listed is how many of the tasks still to do the model is told outright.
 const listed = 200
 
-// system tells the model what it is here for, what day it is, and what the
-// user has: the timetable and the tasks still to do, as they are now.
+// system tells the model what it is here for. It is the same in every
+// request, with the tools: what services keep of what they have read
+// begins with it. What changes, the time and the user's data, goes with
+// the user's messages (context).
 func (h *Home) system() string {
-	now := h.now()
 	var b strings.Builder
 	b.WriteString("你是桌面应用 Atelier 里的助手，帮用户查看和安排待办任务与课表。\n")
-	fmt.Fprintf(&b, "现在是 %s %s %s。\n", now.Format(dateLayout), dayNames[(int(now.Weekday())+6)%7], now.Format("15:04"))
 	b.WriteString(`
 规则：
 - 用简短的中文回答。可以用 Markdown 的列表和加粗让安排一目了然，不要加标题，不要长篇大论。
@@ -1059,8 +1059,33 @@ func (h *Home) system() string {
 - 任务可以修改、标为完成和删除，课程可以修改和删除，用前面方括号里的 id 指明是哪一条；回答用户时不要提 id。
 - 删除不能恢复：只在用户明确说要删时才删，指不清是哪一条时先问清楚。每次删除前应用都会让用户点确认，所以指明了是哪一条就直接调用，不用自己再问一遍“确定吗”；工具说用户没有同意时，就不要再删。
 - 用户附上图片或文件时，按里面的内容回答。要据此添加好几条任务或课程时，先把读到的列出来让用户确认，再添加。
+- 用户的每条消息前面有一段 <context>：当时的时间，以及课表和任务的清单，清单和上一次相同时省略。以最新的一份为准；你用工具做过的改动，以工具回的结果为准。
 - 每天有几节课、每节的起止时间可以用 set_periods 设置。照着用户给的课表添加课程时，节数不够就先加够，上面写了时间的也一并设好。
 `)
+	return b.String()
+}
+
+// context is what a message of the user's is sent after: the time, and the
+// timetable and the tasks still to do as they are now, unless they are as
+// the conversation's last message had them.
+func (h *Home) context() string {
+	now := h.now()
+	data := h.listing()
+	var b strings.Builder
+	fmt.Fprintf(&b, "<context>\n现在是 %s %s %s。\n", now.Format(dateLayout), dayNames[(int(now.Weekday())+6)%7], now.Format("15:04"))
+	if data == h.ui.listed {
+		b.WriteString("课表和任务和上一条消息时一样。\n")
+	} else {
+		h.ui.listed = data
+		b.WriteString(data)
+	}
+	b.WriteString("</context>")
+	return b.String()
+}
+
+// listing writes the timetable and the tasks still to do for the model.
+func (h *Home) listing() string {
+	var b strings.Builder
 	periods := h.table.Periods()
 	fmt.Fprintf(&b, "\n每天 %d 节课，各节的时间：\n%s", len(periods), h.periodLines())
 	b.WriteString("\n课表（每周相同）：\n")

@@ -529,3 +529,62 @@ func TestEffort(t *testing.T) {
 		}
 	}
 }
+
+// TestKept checks what makes services keep what they have read: a user's
+// message goes after its context, to every kind of service, and is saved
+// with it; Anthropic's models are told to keep the system prompt and the
+// conversation up to its end, and other models that take such requests
+// are told nothing of it.
+func TestKept(t *testing.T) {
+	msgs := []Message{
+		{Role: User, Context: "<context>周一</context>", Text: "加个任务"},
+		{Role: Assistant, Calls: []Call{{ID: "c1", Name: "add_task", Input: json.RawMessage(`{"title":"x"}`)}}},
+		{Role: Result, CallID: "c1", Text: "已添加"},
+	}
+	for _, c := range []struct {
+		kind         Kind
+		model, done  string
+		wants, lacks []string
+	}{
+		{Anthropic, "claude-opus-5-5", `{"content":[{"type":"text","text":"好"}]}`, []string{
+			`"system":[{"cache_control":{"type":"ephemeral"},"text":"sys","type":"text"}]`,
+			`{"content":"\u003ccontext\u003e周一\u003c/context\u003e\n\n加个任务","role":"user"}`,
+			`{"cache_control":{"type":"ephemeral"},"content":"已添加","tool_use_id":"c1","type":"tool_result"}`,
+		}, nil},
+		{Anthropic, "deepseek-chat", `{"content":[{"type":"text","text":"好"}]}`, []string{`"system":"sys"`}, []string{"cache_control"}},
+		{Chat, "m", `{"choices":[{"message":{"role":"assistant","content":"好"}}]}`,
+			[]string{`{"content":"\u003ccontext\u003e周一\u003c/context\u003e\n\n加个任务","role":"user"}`}, []string{"cache_control"}},
+		{Responses, "m", `{"output":[{"type":"message","content":[{"type":"output_text","text":"好"}]}]}`,
+			[]string{`{"content":"\u003ccontext\u003e周一\u003c/context\u003e\n\n加个任务","role":"user"}`}, []string{"cache_control"}},
+	} {
+		s := newService(t, 200, c.done)
+		cfg := Config{Kind: c.kind, BaseURL: s.URL, Key: "k", Model: c.model}
+		if _, err := Complete(ctx(t), cfg, Request{System: "sys", Messages: msgs}); err != nil {
+			t.Fatalf("%s %s: %v", c.kind, c.model, err)
+		}
+		sent, _ := json.Marshal(s.body)
+		for _, want := range c.wants {
+			if !strings.Contains(string(sent), want) {
+				t.Errorf("%s %s: the request lacks %s: %s", c.kind, c.model, want, sent)
+			}
+		}
+		for _, not := range c.lacks {
+			if strings.Contains(string(sent), not) {
+				t.Errorf("%s %s: the request has %s: %s", c.kind, c.model, not, sent)
+			}
+		}
+		// A conversation that ends with what the user said keeps that.
+		if _, err := Complete(ctx(t), cfg, Request{System: "sys", Messages: msgs[:1]}); err != nil {
+			t.Fatal(err)
+		}
+		sent, _ = json.Marshal(s.body)
+		if want := `"content":[{"cache_control":{"type":"ephemeral"},"text":"\u003ccontext\u003e周一\u003c/context\u003e\n\n加个任务","type":"text"}]`; c.model == "claude-opus-5-5" && !strings.Contains(string(sent), want) {
+			t.Errorf("%s: the last message is not kept: %s", c.model, sent)
+		}
+	}
+	saved, err := json.Marshal(msgs[0])
+	var back Message
+	if err != nil || json.Unmarshal(saved, &back) != nil || back.Context != msgs[0].Context || back.Text != "加个任务" {
+		t.Errorf("saved as %s, read back %+v", saved, back)
+	}
+}
