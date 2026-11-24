@@ -10,7 +10,8 @@
     "minSdk": 26
   },
   "resourcesExclude": [
-    "icon.png"
+    "icon.png",
+    "tray.png"
   ],
   "updates": {
     "publicKey": "Uev/vcHU50Twx2fxBf+sgcECFP2OVE081IkaJCgIKHs=",
