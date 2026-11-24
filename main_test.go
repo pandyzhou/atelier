@@ -2256,7 +2256,7 @@ func TestTrending(t *testing.T) {
 	}
 	// A click opens the repository's own page, with its README, read from
 	// where the repository's files are and shown without its HTML; its
-	// links and the button go to the browser, and the way back to the list.
+	// links go to the browser, and the way back to the list.
 	click(t, tt, "打开 solo/tiny")
 	tt.Frame()
 	if want := []string{"https://raw.githubusercontent.com/solo/tiny/HEAD/README.md", "https://raw.githubusercontent.com/solo/tiny/HEAD/readme.md"}; !slices.Equal(asked[:min(len(asked), 2)], want) {
@@ -2270,9 +2270,8 @@ func TestTrending(t *testing.T) {
 		t.Errorf("the README's picture is not loaded from the repository: %q", asked)
 	}
 	click(t, tt, "用法")
-	click(t, tt, "在浏览器中打开")
-	if got := tt.OpenedURLs(); !slices.Equal(got, []string{"https://github.com/solo/tiny/blob/HEAD/docs/usage.md", "https://github.com/solo/tiny"}) {
-		t.Errorf("the links open %q", got)
+	if got := tt.OpenedURLs(); !slices.Equal(got, []string{"https://github.com/solo/tiny/blob/HEAD/docs/usage.md"}) || tt.HasText("在浏览器中打开") {
+		t.Errorf("the link opens %q; the page shows %q", got, tt.Texts())
 	}
 	// Opened again, it is not read again.
 	n := len(asked)

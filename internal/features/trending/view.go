@@ -204,7 +204,7 @@ func facts(c *ui.Context, r Repo, forks bool) {
 }
 
 // page is a repository's own page: the way back, what the list says of
-// it, the button that opens it in the browser, and its README.
+// it, the button that puts its README into Chinese, and its README.
 func (t *Trending) page(c *ui.Context, r Repo) {
 	owner, name, _ := strings.Cut(r.Name, "/")
 	services := c.Services()
@@ -212,7 +212,7 @@ func (t *Trending) page(c *ui.Context, r Repo) {
 		if mallow.IconButton(c, "返回热门", mallow.GlyphChevronLeft, mallow.IconButtonStyle{Size: 36}).Clicked() {
 			t.Close()
 		}
-		// Whose it is and its name, beside the buttons, which go under
+		// Whose it is and its name, beside the button, which goes under
 		// them where the page is too narrow for both; then what it is.
 		ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
 			ui.Row(c).Wrap().Gap(10).AlignItems(ui.Center).Children(func() {
@@ -220,12 +220,7 @@ func (t *Trending) page(c *ui.Context, r Repo) {
 					ui.Text(c, owner+" /").FontSize(18).TextColor(mallow.Muted).SingleLine().Shrink(1).MinWidth(0)
 					ui.Text(c, name).FontSize(22).FontWeight(600).TextColor(mallow.Text).SingleLine().Shrink(1).MinWidth(0)
 				})
-				ui.Row(c).Shrink(0).Gap(12).Children(func() {
-					t.translateButton(c, r.Name)
-					if mallow.Button(c, "在浏览器中打开").Clicked() {
-						services.OpenURL(r.URL())
-					}
-				})
+				ui.Row(c).Shrink(0).Gap(12).Children(func() { t.translateButton(c, r.Name) })
 			})
 			if r.Description != "" {
 				ui.Text(c, r.Description).FontSize(13).TextColor(mallow.Text).MaxLines(3)

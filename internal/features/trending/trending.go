@@ -33,9 +33,6 @@ type Repo struct {
 	Gained      int    `json:"gained"` // the stars it got this week
 }
 
-// URL is where the repository is.
-func (r Repo) URL() string { return "https://github.com/" + r.Name }
-
 // Options are what the page needs of the app around it.
 type Options struct {
 	// Fetch returns what is at an address of GitHub's, and ErrNotFound for
