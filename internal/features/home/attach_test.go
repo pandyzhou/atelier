@@ -10,6 +10,7 @@ import (
 	"image/gif"
 	"image/jpeg"
 	"image/png"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -228,10 +229,71 @@ func TestReadDocuments(t *testing.T) {
 	if _, err := read("空的.docx", madeWord(t, "word/document.xml", "<w:p/>")); err == nil || !strings.Contains(err.Error(), "里没有文字") {
 		t.Errorf("a Word document without text: %v", err)
 	}
-	if _, err := read("表格.xlsx", madeWord(t, "xl/workbook.xml", "")); err == nil || !strings.Contains(err.Error(), "还读不了") {
-		t.Errorf("a spreadsheet: %v", err)
-	}
-	if _, err := read("旧的.doc", []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}); err == nil || !strings.Contains(err.Error(), "另存为 .docx") {
+	if _, err := read("旧的.doc", []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}); err == nil || !strings.Contains(err.Error(), "另存为新版格式") {
 		t.Errorf("an old Word document: %v", err)
+	}
+}
+
+// madeOffice is a zip file of the parts given, as the newer Office files
+// are: each a name and what is in it.
+func madeOffice(t *testing.T, parts ...string) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	z := zip.NewWriter(&b)
+	for i := 0; i+1 < len(parts); i += 2 {
+		w, err := z.Create(parts[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.WriteString(w, parts[i+1])
+	}
+	if err := z.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+// TestReadWorkbooksAndSlides checks that a workbook is sent as the rows of
+// its sheets, with dates and numbers as its sheets show them, and a
+// presentation as the text of its slides, in their order.
+func TestReadWorkbooksAndSlides(t *testing.T) {
+	book := madeOffice(t,
+		"xl/workbook.xml", `<workbook xmlns:r="r"><sheets><sheet name="课表" sheetId="1" r:id="rId2"/><sheet name="空的" sheetId="2" r:id="rId3"/><sheet name="成绩" sheetId="3" r:id="rId1"/></sheets></workbook>`,
+		"xl/_rels/workbook.xml.rels", `<Relationships><Relationship Id="rId1" Target="worksheets/sheet3.xml"/><Relationship Id="rId2" Target="/xl/worksheets/sheet1.xml"/><Relationship Id="rId3" Target="worksheets/sheet2.xml"/></Relationships>`,
+		"xl/sharedStrings.xml", `<sst><si><t>星期</t></si><si><r><t>高等</t></r><r><t>数学</t></r><rPh><t>こうとう</t></rPh></si><si><t>交报告</t></si></sst>`,
+		"xl/styles.xml", `<styleSheet><numFmts><numFmt numFmtId="176" formatCode="yyyy&quot;年&quot;m&quot;月&quot;d&quot;日&quot;"/><numFmt numFmtId="177" formatCode="0.00&quot;d&quot;"/></numFmts><cellStyleXfs><xf numFmtId="14"/></cellStyleXfs><cellXfs><xf numFmtId="0"/><xf numFmtId="176"/><xf numFmtId="20"/><xf numFmtId="177"/><xf numFmtId="22"/></cellXfs></styleSheet>`,
+		"xl/worksheets/sheet1.xml", `<worksheet><sheetData>`+
+			`<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="D1" t="inlineStr"><is><t>A301</t></is></c></row>`+
+			`<row r="2"></row>`+
+			`<row r="3"><c r="A3" t="s"><v>2</v></c><c r="B3" s="1"><v>46359</v></c><c r="C3" s="2"><v>0.375</v></c><c r="D3" s="4"><v>46359.75</v></c></row>`+
+			`</sheetData></worksheet>`,
+		"xl/worksheets/sheet2.xml", `<worksheet><sheetData/></worksheet>`,
+		"xl/worksheets/sheet3.xml", `<worksheet><sheetData><row><c><v>0.30000000000000004</v></c><c s="3"><v>46359</v></c><c t="b"><v>1</v></c><c t="str"><f>A1</f><v>合计</v></c><c><v>1200000</v></c></row></sheetData></worksheet>`,
+	)
+	want := "【工作表：课表】\n星期\t高等数学\t\tA301\n交报告\t2026-12-03\t09:00\t2026-12-03 18:00\n\n【工作表：成绩】\n0.3\t46359\t是\t合计\t1200000"
+	if p, err := read("课表.xlsx", book); err != nil || p.Text != want {
+		t.Errorf("a workbook: %q, %v", p.Text, err)
+	}
+	if _, err := read("空.xlsx", madeOffice(t, "xl/workbook.xml", `<workbook/>`)); err == nil || !strings.Contains(err.Error(), "里没有文字") {
+		t.Errorf("a workbook of nothing: %v", err)
+	}
+
+	slide := func(body string) string {
+		return `<p:sld xmlns:p="p" xmlns:a="a"><p:cSld>` + body + `</p:cSld></p:sld>`
+	}
+	deck := madeOffice(t,
+		"ppt/presentation.xml", `<p:presentation xmlns:p="p" xmlns:r="r"><p:sldMasterIdLst><p:sldMasterId id="1" r:id="rId9"/></p:sldMasterIdLst><p:sldIdLst><p:sldId id="256" r:id="rId3"/><p:sldId id="257" r:id="rId2"/><p:sldId id="258" r:id="rId4"/></p:sldIdLst></p:presentation>`,
+		"ppt/_rels/presentation.xml.rels", `<Relationships><Relationship Id="rId2" Target="slides/slide1.xml"/><Relationship Id="rId3" Target="slides/slide2.xml"/><Relationship Id="rId4" Target="slides/slide3.xml"/><Relationship Id="rId9" Target="slideMasters/slideMaster1.xml"/></Relationships>`,
+		"ppt/slides/slide1.xml", slide(`<a:p><a:r><a:t>作业要求</a:t></a:r></a:p><a:p><a:r><a:t>周三前</a:t></a:r><a:br/><a:r><a:t>交到教务处</a:t></a:r></a:p>`),
+		"ppt/slides/slide2.xml", slide(`<a:p><a:r><a:t>第三周</a:t></a:r><a:r><a:t> 安排</a:t></a:r></a:p><a:tbl><a:tr><a:tc><a:txBody><a:p><a:r><a:t>周一</a:t></a:r></a:p></a:txBody></a:tc><a:tc><a:txBody><a:p><a:r><a:t>高数</a:t></a:r></a:p></a:txBody></a:tc></a:tr></a:tbl>`),
+		"ppt/slides/slide3.xml", slide(`<a:p/>`),
+		"ppt/slideMasters/slideMaster1.xml", slide(`<a:p><a:r><a:t>单击此处编辑母版标题</a:t></a:r></a:p>`),
+	)
+	want = "【第 1 页】\n第三周 安排\n周一\t高数\n\n【第 2 页】\n作业要求\n周三前\n交到教务处"
+	if p, err := read("安排.pptx", deck); err != nil || p.Text != want {
+		t.Errorf("a presentation: %q, %v", p.Text, err)
+	}
+	if _, err := read("别的.zip", madeOffice(t, "a.txt", "x")); err == nil || !strings.Contains(err.Error(), "还读不了") {
+		t.Errorf("another zip file: %v", err)
 	}
 }

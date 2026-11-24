@@ -20,7 +20,7 @@ import (
 
 var (
 	errNoText    = errors.New("no text")
-	errNotWord   = errors.New("not a Word document")
+	errNotOffice = errors.New("not an Office document")
 	errUnreadble = errors.New("unreadable")
 )
 
@@ -167,7 +167,7 @@ const maxDocument = 64 << 20
 func wordText(data []byte) (string, error) {
 	z, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
-		return "", errNotWord
+		return "", errNotOffice
 	}
 	var body *zip.File
 	for _, f := range z.File {
@@ -176,7 +176,7 @@ func wordText(data []byte) (string, error) {
 		}
 	}
 	if body == nil {
-		return "", errNotWord
+		return "", errNotOffice
 	}
 	f, err := body.Open()
 	if err != nil {
@@ -265,10 +265,10 @@ func document(name string, data []byte) (text string, is bool, err error) {
 		}
 		return text, true, err
 	case bytes.HasPrefix(data, []byte("PK\x03\x04")):
-		text, err = wordText(data)
+		text, err = officeText(data)
 		switch err {
-		case errNotWord:
-			err = fmt.Errorf("“%s”这种文件还读不了，文档只支持 PDF 和 Word（.docx）", name)
+		case errNotOffice:
+			err = fmt.Errorf("“%s”这种文件还读不了，文档只支持 PDF、Word、Excel 和 PPT", name)
 		case errNoText:
 			err = fmt.Errorf("“%s”里没有文字", name)
 		case nil:
@@ -277,7 +277,7 @@ func document(name string, data []byte) (text string, is bool, err error) {
 		}
 		return text, true, err
 	case bytes.HasPrefix(data, []byte{0xD0, 0xCF, 0x11, 0xE0}):
-		return "", true, fmt.Errorf("“%s”是旧版的 Office 文件，请另存为 .docx 再添加", name)
+		return "", true, fmt.Errorf("“%s”是旧版的 Office 文件，请另存为新版格式（.docx、.xlsx、.pptx）再添加", name)
 	}
 	return "", false, nil
 }
