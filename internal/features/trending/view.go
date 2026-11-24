@@ -20,6 +20,22 @@ type viewState struct {
 	open    string
 	readmes map[string]*readme
 	doc     mallow.Document
+	// translating is the translation under way, nil for none, and runs
+	// counts those begun; original is whether the README shows as it was
+	// written though there is a translation of it; translateProblem is why
+	// the last translation failed.
+	translating      *translating
+	runs             int
+	original         bool
+	translateProblem string
+	// chinese are the parts of the translation that shows, made of so
+	// much text of a repository's, for a dark palette or a light one.
+	chinese struct {
+		name  string
+		of    int
+		dark  bool
+		parts []part
+	}
 }
 
 // View builds the page: one card, a heading over the list. It reads the
@@ -120,6 +136,56 @@ func (t *Trending) row(c *ui.Context, place int, r Repo) {
 	}
 }
 
+// translateButton is what puts a repository's README into Chinese: it
+// asks the model, stops it while it writes, and once there is a
+// translation goes between it and the README as it was written.
+func (t *Trending) translateButton(c *ui.Context, name string) {
+	about := t.ui.readmes[name]
+	if !t.CanTranslate(name) {
+		return
+	}
+	switch job := t.ui.translating; {
+	case job != nil && job.name == name:
+		if mallow.Button(c, "停止翻译").Clicked() {
+			t.StopTranslating()
+		}
+	case t.translated(name, about) == "":
+		if mallow.Button(c, "翻译成中文").Clicked() {
+			t.Translate(name)
+		}
+	case t.ui.original:
+		if mallow.Button(c, "看中文").Clicked() {
+			t.ui.original = false
+		}
+	default:
+		if mallow.Button(c, "看原文").Clicked() {
+			t.ui.original = true
+		}
+	}
+}
+
+// showing returns the parts of a repository's README that show: of its
+// translation as far as it has come, or as it was kept, unless the README
+// as it was written is asked for or there is none.
+func (t *Trending) showing(name string, about *readme) []part {
+	dark := mallow.IsDark()
+	text := ""
+	if job := t.ui.translating; job != nil && job.name == name {
+		if text = job.text; strings.TrimSpace(text) == "" {
+			return []part{{text: "*正在翻译…*"}}
+		}
+	} else if !t.ui.original {
+		text = t.translated(name, about)
+	}
+	if text == "" {
+		return about.shown(dark)
+	}
+	if k := &t.ui.chinese; k.name != name || k.of != len(text) || k.dark != dark || k.parts == nil {
+		k.name, k.of, k.dark, k.parts = name, len(text), dark, Parts(Tidy(text, dark))
+	}
+	return t.ui.chinese.parts
+}
+
 // facts is a repository's language, its stars, its forks, and how many of
 // its stars are this week's, on a line.
 func facts(c *ui.Context, r Repo, forks bool) {
@@ -146,20 +212,30 @@ func (t *Trending) page(c *ui.Context, r Repo) {
 		if mallow.IconButton(c, "返回热门", mallow.GlyphChevronLeft, mallow.IconButtonStyle{Size: 36}).Clicked() {
 			t.Close()
 		}
+		// Whose it is and its name, beside the buttons, which go under
+		// them where the page is too narrow for both; then what it is.
 		ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
-			ui.Row(c).Gap(6).AlignItems(ui.Baseline).Children(func() {
-				ui.Text(c, owner+" /").FontSize(18).TextColor(mallow.Muted).SingleLine().Shrink(1).MinWidth(0)
-				ui.Text(c, name).FontSize(22).FontWeight(600).TextColor(mallow.Text).SingleLine().Shrink(1).MinWidth(0)
+			ui.Row(c).Wrap().Gap(10).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).Grow(1).Basis(280).MinWidth(0).Gap(6).AlignItems(ui.Baseline).Children(func() {
+					ui.Text(c, owner+" /").FontSize(18).TextColor(mallow.Muted).SingleLine().Shrink(1).MinWidth(0)
+					ui.Text(c, name).FontSize(22).FontWeight(600).TextColor(mallow.Text).SingleLine().Shrink(1).MinWidth(0)
+				})
+				ui.Row(c).Shrink(0).Gap(12).Children(func() {
+					t.translateButton(c, r.Name)
+					if mallow.Button(c, "在浏览器中打开").Clicked() {
+						services.OpenURL(r.URL())
+					}
+				})
 			})
 			if r.Description != "" {
 				ui.Text(c, r.Description).FontSize(13).TextColor(mallow.Text).MaxLines(3)
 			}
 			facts(c, r, true)
 		})
-		if mallow.Button(c, "在浏览器中打开").Clicked() {
-			services.OpenURL(r.URL())
-		}
 	})
+	if t.ui.translateProblem != "" {
+		ui.Text(c, t.ui.translateProblem).FontSize(13).TextColor(mallow.Danger).Padding(0, 28, 0, 74)
+	}
 	mallow.Groove(c).Margin(0, 24)
 	about := t.ui.readmes[r.Name]
 	word := ""
@@ -199,7 +275,7 @@ func (t *Trending) page(c *ui.Context, r Repo) {
 	ui.Scroll(c.Key("readme:"+r.Name)).Label("README").Grow(1).MinHeight(0).Padding(4, 24, 24, 28).Children(func() {
 		ui.Row(c).Justify(ui.Center).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).MaxWidth(860).Gap(12).Children(func() {
-				for i, p := range about.shown(mallow.IsDark()) {
+				for i, p := range t.showing(r.Name, about) {
 					if !p.centered {
 						t.ui.doc.View(c.Key(i), p.text)
 						continue

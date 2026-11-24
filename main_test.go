@@ -2281,11 +2281,63 @@ func TestTrending(t *testing.T) {
 	if len(asked) != n || !tt.HasText("小而快，见") {
 		t.Errorf("a README read is read again: %q", asked[n:])
 	}
+	// The README is put into Chinese by the model the user chose: asked
+	// for the first stretch with a word of what the repository is, what
+	// it writes shows as it comes, HTML and all, and is kept.
+	if tt.HasText("翻译成中文") != true || tt.HasText("看原文") {
+		t.Fatalf("before translating: %q", tt.Texts())
+	}
+	click(t, tt, "翻译成中文")
+	if !tt.HasText("还没有可用的模型，请先到设置里添加。") {
+		t.Fatalf("translating without a model: %q", tt.Texts())
+	}
+	key, err := a.box.Seal("k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.settings.Models = []modelConfig{{ID: 1, Name: "P", Kind: string(llm.Chat), Key: key, Models: []string{"m"}}}
+	a.settings.Model, a.settings.ModelName = 1, "m"
+	var translations []llm.Request
+	coming := ""
+	a.complete = func(_ context.Context, _ llm.Config, r llm.Request, onText func(string)) (llm.Message, error) {
+		translations = append(translations, r)
+		out := "> **简介**\n> 一个很小的工具。\n\n<h1 align=\"center\">Tiny 小工具</h1>\n\n小而快，见 [用法](docs/usage.md)。"
+		onText("> **简介**\n> 一个很小")
+		tt.Frame()
+		coming = strings.Join(tt.Texts(), "|")
+		onText("的工具。")
+		return llm.Message{Role: llm.Assistant, Text: out}, nil
+	}
+	// Asked from outside a frame, as a click is in the app, so that the
+	// frame in the middle of the answer shows it as far as it has come.
+	tr.Translate("solo/tiny")
+	tt.Frame()
+	if len(translations) != 1 || len(translations[0].Tools) != 0 || !strings.Contains(translations[0].System, "简介") || !strings.Contains(translations[0].Messages[0].Text, "仓库：solo/tiny") || !strings.Contains(translations[0].Messages[0].Text, `<h1 align="center">Tiny</h1>`) {
+		t.Fatalf("the model is asked %+v", translations)
+	}
+	if !strings.Contains(coming, "停止翻译") || !strings.Contains(coming, "一个很小") {
+		t.Errorf("while the translation came: %q", coming)
+	}
+	if !tt.HasText("一个很小的工具。") || !tt.HasText("Tiny 小工具") || tt.HasText("align") || !tt.HasText("看原文") || tt.HasText("停止翻译") {
+		t.Fatalf("after translating: %q", tt.Texts())
+	}
+	// The README as it was written, and the translation again without
+	// asking; so after going away and back, and after a restart.
+	click(t, tt, "看原文")
+	if !tt.HasText("小而快，见") || tt.HasText("一个很小的工具。") || !tt.HasText("看中文") {
+		t.Fatalf("the README as written: %q", tt.Texts())
+	}
+	click(t, tt, "看中文")
+	click(t, tt, "返回热门", "打开 solo/tiny")
+	tt.Frame()
+	if len(translations) != 1 || !tt.HasText("一个很小的工具。") {
+		t.Errorf("a README translated is translated again, or does not show: %d, %q", len(translations), tt.Texts())
+	}
 	// One without a README says so; one that cannot be read, why, and can
 	// be tried again.
 	click(t, tt, "返回热门", "打开 acme/rocket")
 	tt.Frame()
-	if !tt.HasText("这个仓库没有 README。") {
+	if !tt.HasText("这个仓库没有 README。") || tt.HasText("翻译成中文") {
 		t.Errorf("a repository without a README: %q", tt.Texts())
 	}
 	click(t, tt, "返回热门")

@@ -131,3 +131,29 @@ func TestResized(t *testing.T) {
 		}
 	}
 }
+
+// TestChunks checks that a README is cut into stretches at the blank lines
+// between its paragraphs, sooner before a heading, never within code, and
+// that nothing of it is lost.
+func TestChunks(t *testing.T) {
+	code := "```sh\n" + strings.Repeat("echo one\n\n", 30) + "```\n"
+	src := "# Title\n\n" + strings.Repeat("A paragraph of the README.\n\n", 8) + "## Install\n\n" + code + "\n## Use\n\nThe end.\n"
+	parts := chunks(src, 200)
+	if strings.Join(parts, "") != src {
+		t.Fatalf("the stretches do not make the README: %q", parts)
+	}
+	if len(parts) < 3 {
+		t.Fatalf("cut into %d stretches: %q", len(parts), parts)
+	}
+	for i, p := range parts {
+		if strings.Count(p, "```")%2 != 0 {
+			t.Errorf("stretch %d cuts a block of code: %q", i, p)
+		}
+	}
+	if !strings.HasPrefix(parts[len(parts)-1], "## Use") {
+		t.Errorf("no stretch begins at the heading after the code: %q", parts)
+	}
+	if got := chunks("one\n\ntwo\n", 1000); len(got) != 1 || got[0] != "one\n\ntwo\n" {
+		t.Errorf("a short README is cut into %q", got)
+	}
+}

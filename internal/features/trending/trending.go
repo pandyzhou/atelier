@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pandyzhou/atelier/internal/llm"
 	"github.com/pandyzhou/atelier/internal/store"
 )
 
@@ -43,12 +44,21 @@ type Options struct {
 	Fetch func(ctx context.Context, url string) ([]byte, error)
 	// Background runs work off the UI's thread, then what it returns on it.
 	Background func(work func() func())
+	// Model returns the model to ask, and whether one is set, and Complete
+	// asks it, giving onText the answer's text as it comes, off the UI's
+	// thread; OnUI runs fn on the UI's thread, and shows the window anew.
+	// They are for translating READMEs: without them none is.
+	Model    func() (llm.Config, bool)
+	Complete func(ctx context.Context, c llm.Config, r llm.Request, onText func(string)) (llm.Message, error)
+	OnUI     func(fn func())
 }
 
 // data is what is saved: the list as it was last read, and when.
 type data struct {
 	Repos   []Repo `json:"repos"`
 	Fetched string `json:"fetched,omitempty"` // RFC 3339
+	// Translations are the READMEs put into Chinese, the newest first.
+	Translations []translation `json:"translations,omitempty"`
 }
 
 // Trending is the feature.
@@ -126,7 +136,7 @@ func (t *Trending) Refresh() {
 				t.ui.problem = "没有刷新成功：" + err.Error()
 				return
 			}
-			t.data = data{Repos: repos, Fetched: t.now().Format(time.RFC3339)}
+			t.data.Repos, t.data.Fetched = repos, t.now().Format(time.RFC3339)
 			if err := t.store.Save(t.ID(), &t.data); err != nil {
 				log.Printf("trending: save: %v", err)
 			}

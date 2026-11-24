@@ -64,7 +64,14 @@ func (a *app) makeFeatures(s *store.Store) []feature.Feature {
 		tasks.Calendar(),
 		// It reads its list only once main says from where: tests read
 		// nothing from the network.
-		trending.New(s, trending.Options{Background: a.background}),
+		trending.New(s, trending.Options{
+			Background: a.background,
+			Model:      a.DefaultModel,
+			Complete: func(ctx context.Context, c llm.Config, r llm.Request, onText func(string)) (llm.Message, error) {
+				return a.complete(ctx, c, r, onText)
+			},
+			OnUI: a.onUI,
+		}),
 	}
 }
 

@@ -46,7 +46,7 @@ type readme struct {
 
 // Open shows a repository's page, and reads its README unless that was read.
 func (t *Trending) Open(name string) {
-	t.ui.open = name
+	t.ui.open, t.ui.original, t.ui.translateProblem = name, false, ""
 	if t.Fetch == nil {
 		return
 	}
