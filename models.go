@@ -508,8 +508,9 @@ func (a *app) modelAdder(c *ui.Context, m *modelConfig) {
 			})
 		}
 		// As tall whatever it holds: the dialog does not jump as the list
-		// comes in or is narrowed.
-		ui.Scroll(c).Label("可添加的模型").Height(300).Shrink(1).MinHeight(0).Gap(2).Children(func() {
+		// comes in or is narrowed. The room at its right is the scroll
+		// bar's, which would lie over the pluses.
+		ui.Scroll(c).Label("可添加的模型").Height(300).Shrink(1).MinHeight(0).Padding(0, 18, 0, 0).Gap(2).Children(func() {
 			if typed != "" && !slices.Contains(list.names, typed) {
 				offer(typed, "按这个名字添加")
 			}
