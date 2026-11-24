@@ -77,6 +77,7 @@ const (
 	answer         // what the model answered
 	action         // something done for the user, as a task added
 	problem        // what went wrong
+	note           // something not done, as a deletion the user declined
 )
 
 // entry is a line of a conversation, as the page shows it.
@@ -183,6 +184,15 @@ func (h *Home) Stop() {
 			h.ui.entries[g].Text = text
 			h.ui.history = append(h.ui.history, llm.Message{Role: llm.Assistant, Text: text})
 		}
+	}
+	// A deletion that waits is not done, nor what was called for after
+	// it: each call has its answer, as the model's service wants it.
+	if a := h.ui.asking; a != nil {
+		for _, call := range a.calls {
+			h.ui.history = append(h.ui.history, llm.Message{Role: llm.Result, CallID: call.ID, Text: "用户停止了，没有执行。"})
+		}
+		h.ui.entries = append(h.ui.entries, entry{Kind: note, Text: "没有删除" + a.what})
+		h.ui.asking = nil
 	}
 	h.ui.run++ // what still comes of it is dropped
 	h.ui.busy, h.ui.growing, h.ui.cancel = false, -1, nil
@@ -412,16 +422,76 @@ func (h *Home) step(n int) {
 				h.done()
 				return
 			}
-			for _, call := range msg.Calls {
-				h.ui.history = append(h.ui.history, llm.Message{Role: llm.Result, CallID: call.ID, Text: h.call(call)})
-			}
-			if n+1 >= maxSteps {
-				h.fail("这件事步骤太多，先停在这里了。")
-				return
-			}
-			h.step(n + 1)
+			h.answer(msg.Calls, n)
 		}
 	})
+}
+
+// asking is a deletion the model called for, which waits for the user to
+// say whether it is to be done.
+type asking struct {
+	what string // what is to be deleted, as the user is asked
+	// calls are the calls still to answer: the deletion, and those after it.
+	calls []llm.Call
+	n     int // the step they are of
+}
+
+// answer does what the model called for at step n, tells it what came of
+// each, and asks it to go on. A deletion is not done until the user agrees
+// to it: the turn waits there, for Confirm.
+func (h *Home) answer(calls []llm.Call, n int) {
+	for i, call := range calls {
+		if what := h.deletes(call); what != "" {
+			h.ui.asking, h.ui.follow = &asking{what: what, calls: calls[i:], n: n}, true
+			return
+		}
+		h.ui.history = append(h.ui.history, llm.Message{Role: llm.Result, CallID: call.ID, Text: h.call(call)})
+	}
+	if n+1 >= maxSteps {
+		h.fail("这件事步骤太多，先停在这里了。")
+		return
+	}
+	h.step(n + 1)
+}
+
+// Confirm answers the deletion that waits: done if yes, else left, which
+// the model is told; then the turn goes on.
+func (h *Home) Confirm(yes bool) {
+	a := h.ui.asking
+	if a == nil {
+		return
+	}
+	h.ui.asking = nil
+	call := a.calls[0]
+	result := "用户没有同意，没有删除。"
+	if yes {
+		result = h.call(call)
+	} else {
+		h.ui.entries = append(h.ui.entries, entry{Kind: note, Text: "没有删除" + a.what})
+	}
+	h.ui.history = append(h.ui.history, llm.Message{Role: llm.Result, CallID: call.ID, Text: result})
+	h.ui.follow = true
+	h.answer(a.calls[1:], a.n)
+}
+
+// deletes says what a call would delete, as "任务“交电费”": "" when it is
+// not a deletion, or of nothing there is, which needs no asking.
+func (h *Home) deletes(c llm.Call) string {
+	var in struct{ ID int }
+	if json.Unmarshal(c.Input, &in) != nil {
+		return ""
+	}
+	switch c.Name {
+	case "delete_task":
+		if k := h.tasks.Task(in.ID); k != nil {
+			return "任务“" + k.Title + "”"
+		}
+	case "delete_course":
+		if k := h.table.Course(in.ID); k != nil {
+			return fmt.Sprintf("课程“%s”（%s第 %s 节）", k.Name, dayNames[k.Day], span(k.From, k.To))
+		}
+	}
+	return ""
 }
 
 // grow shows more of the answer that is coming: at the end of the one that
@@ -987,7 +1057,7 @@ func (h *Home) system() string {
 - 添加前信息不全（比如课程没说星期几、第几节）就先问清楚，不要猜。
 - 添加成功后用一句话确认。工具说失败时，把原因告诉用户。
 - 任务可以修改、标为完成和删除，课程可以修改和删除，用前面方括号里的 id 指明是哪一条；回答用户时不要提 id。
-- 删除不能恢复：只在用户明确说要删时才删，指不清是哪一条、或者一次要删好几条时，先列出来问清楚。
+- 删除不能恢复：只在用户明确说要删时才删，指不清是哪一条时先问清楚。每次删除前应用都会让用户点确认，所以指明了是哪一条就直接调用，不用自己再问一遍“确定吗”；工具说用户没有同意时，就不要再删。
 - 用户附上图片或文件时，按里面的内容回答。要据此添加好几条任务或课程时，先把读到的列出来让用户确认，再添加。
 - 每天有几节课、每节的起止时间可以用 set_periods 设置。照着用户给的课表添加课程时，节数不够就先加够，上面写了时间的也一并设好。
 `)

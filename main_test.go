@@ -836,8 +836,30 @@ func TestHome(t *testing.T) {
 	if h.CanRegenerate() {
 		t.Errorf("a turn that changed a task can be regenerated")
 	}
+	// A deletion waits for the user's word: declined, nothing is deleted,
+	// which the model is told; agreed to, it is done.
 	n0 := len(tasks.Tasks())
+	answers = append(answers[:len(answers)-2:len(answers)-2],
+		llm.Message{Role: llm.Assistant, Calls: []llm.Call{call("c7a", "delete_task", fmt.Sprintf(`{"id":%d}`, bill.ID))}},
+		llm.Message{Role: llm.Assistant, Text: "好的，先留着。"},
+		llm.Message{Role: llm.Assistant, Calls: []llm.Call{call("c7", "delete_task", fmt.Sprintf(`{"id":%d}`, bill.ID))}},
+		llm.Message{Role: llm.Assistant, Text: "删掉了。"})
+	already := len(asked)
 	say("把电费那条删了")
+	if len(tasks.Tasks()) != n0 || len(asked) != already+1 || !tt.HasText("要删除任务“交电费”吗？") || tt.HasText("正在想…") || !tt.HasText("停止") {
+		t.Fatalf("a deletion does not wait to be confirmed: %d tasks, asked %d more times, %q", len(tasks.Tasks()), len(asked)-already, tt.Texts())
+	}
+	click(t, tt, "不删")
+	tt.Frame()
+	if got := asked[len(asked)-1].Messages; len(tasks.Tasks()) != n0 || !strings.Contains(got[len(got)-1].Text, "用户没有同意") || !tt.HasText("没有删除任务“交电费”") || !tt.HasText("好的，先留着。") || tt.HasText("要删除任务") {
+		t.Fatalf("after declining: %d tasks, the model told %q, %q", len(tasks.Tasks()), got[len(got)-1].Text, tt.Texts())
+	}
+	say("还是删了吧")
+	if len(tasks.Tasks()) != n0 || !tt.HasText("要删除任务“交电费”吗？") {
+		t.Fatalf("the second deletion does not wait: %q", tt.Texts())
+	}
+	click(t, tt, "删除")
+	tt.Frame()
 	if len(tasks.Tasks()) != n0-1 || tasks.Task(bill.ID) != nil || !tt.HasText("已删除任务：交电费") {
 		t.Fatalf("after delete_task: %d tasks, %q", len(tasks.Tasks()), tt.Texts())
 	}
@@ -870,7 +892,28 @@ func TestHome(t *testing.T) {
 	if !tt.HasText("已修改课程：高等数学 · 改名为“高数”，改到周四第 5–6 节，改了地点") {
 		t.Errorf("the course's change does not show: %q", tt.Texts())
 	}
+	// Stopped while a deletion waits, nothing is deleted, and the model
+	// has an answer to its call, so that the conversation can go on.
+	answers = append(answers[:len(answers)-2:len(answers)-2],
+		llm.Message{Role: llm.Assistant, Calls: []llm.Call{call("c11a", "delete_course", fmt.Sprintf(`{"id":%d}`, math.ID)), call("c11b", "add_task", `{"title":"不该加的"}`)}},
+		llm.Message{Role: llm.Assistant, Calls: []llm.Call{call("c11", "delete_course", fmt.Sprintf(`{"id":%d}`, math.ID))}},
+		llm.Message{Role: llm.Assistant, Text: "删掉了。"})
 	say("把高数删了")
+	if !tt.HasText("要删除课程“高数”（周四第 5–6 节）吗？") {
+		t.Fatalf("a course's deletion does not wait: %q", tt.Texts())
+	}
+	n1 := len(tasks.Tasks())
+	click(t, tt, "停止")
+	tt.Frame()
+	if table.Course(math.ID) == nil || len(tasks.Tasks()) != n1 || tt.HasText("要删除课程") || !tt.HasText("没有删除课程“高数”") {
+		t.Fatalf("after stopping at a deletion: %q", tt.Texts())
+	}
+	say("把高数删了")
+	if got := asked[len(asked)-1].Messages; got[len(got)-2].Role != llm.Result || got[len(got)-3].Role != llm.Result || !strings.Contains(got[len(got)-2].Text, "没有执行") {
+		t.Fatalf("after stopping, the model is sent %+v", got[len(got)-4:])
+	}
+	click(t, tt, "删除")
+	tt.Frame()
 	if table.Course(math.ID) != nil || len(table.Courses()) != 1 || !tt.HasText("已删除课程：高数 · 周四第 5–6 节") {
 		t.Fatalf("after delete_course: %d courses, %q", len(table.Courses()), tt.Texts())
 	}
@@ -1078,6 +1121,11 @@ func TestScreenshot(t *testing.T) {
 		asked := 0
 		a.complete = func(context.Context, llm.Config, llm.Request, func(string)) (llm.Message, error) {
 			asked++
+			// ATELIER_SCREENSHOT_DELETE has it call for a deletion first,
+			// which waits to be confirmed.
+			if asked == 1 && os.Getenv("ATELIER_SCREENSHOT_DELETE") != "" {
+				return llm.Message{Role: llm.Assistant, Calls: []llm.Call{{ID: "d", Name: "delete_task", Input: json.RawMessage(`{"id":1}`)}}}, nil
+			}
 			if asked%2 == 1 {
 				return llm.Message{Role: llm.Assistant, Calls: []llm.Call{{ID: "c", Name: "add_task", Input: json.RawMessage(`{"title":"交实验报告","due":"` + day(1) + `"}`)}}}, nil
 			}

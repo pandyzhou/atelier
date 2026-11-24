@@ -36,6 +36,7 @@ type viewState struct {
 	thinking  time.Time
 	opened    map[int]bool
 	efforting bool
+	asking    *asking   // the deletion that waits for the user's word
 	pending   []pending // the files to send with the next message
 	loading   int       // how many more of them are being read
 	note      string    // what could not be attached, and why
@@ -540,7 +541,10 @@ func (h *Home) conversation(c *ui.Context) {
 			for i, e := range h.ui.entries {
 				last = h.entry(c.Key(i), i, e)
 			}
-			if h.ui.busy && h.ui.growing < 0 {
+			switch {
+			case h.ui.asking != nil:
+				last = h.confirm(c)
+			case h.ui.busy && h.ui.growing < 0:
 				last = ui.Text(c, "正在想…").FontSize(13).TextColor(mallow.Muted)
 			}
 			if h.ui.follow {
@@ -553,6 +557,28 @@ func (h *Home) conversation(c *ui.Context) {
 	ui.Column(c).Shrink(0).Padding(8, 18, 0, 0).Children(func() {
 		centered(c, 0, func() { h.field(c, ok) })
 	})
+}
+
+// confirm asks whether what the assistant would delete is to be deleted:
+// nothing is until the user says so.
+func (h *Home) confirm(c *ui.Context) ui.Element {
+	card := ui.Column(c).Label("确认删除").Padding(14, 16).Gap(12).Radius(mallow.RadiusSmall)
+	mallow.Raised(card, mallow.Tiny)
+	yes, no := false, false
+	card.Children(func() {
+		ui.Column(c).Gap(4).Children(func() {
+			ui.Text(c, "要删除"+h.ui.asking.what+"吗？").FontSize(14).FontWeight(500).TextColor(mallow.Text)
+			ui.Text(c, "删了不能恢复。").FontSize(12).TextColor(mallow.Muted)
+		})
+		ui.Row(c).Gap(12).Justify(ui.End).Children(func() {
+			no = mallow.Button(c, "不删").Clicked()
+			yes = mallow.PrimaryButton(c, "删除").Clicked()
+		})
+	})
+	if yes || no {
+		h.Confirm(yes)
+	}
+	return card
 }
 
 // entry is a line of the conversation: what the user wrote to the right,
@@ -583,6 +609,8 @@ func (h *Home) entry(c *ui.Context, i int, e entry) ui.Element {
 		})
 	case problem:
 		return ui.Text(c, e.Text).FontSize(13).TextColor(mallow.Danger)
+	case note:
+		return ui.Text(c, e.Text).FontSize(13).TextColor(mallow.Muted)
 	}
 	growing := i == h.ui.growing
 	return ui.Column(c).Gap(2).Children(func() {
