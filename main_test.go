@@ -235,19 +235,10 @@ func TestTodoNoListsOrPriority(t *testing.T) {
 // it adds nothing, and starts blank the next time.
 func TestTodoAddDialog(t *testing.T) {
 	d, tt := newTodoTester(t)
-	// No button adds a task: the context menus do, and the page says so
-	// where it has no task to show.
-	if tt.HasText("添加任务") {
-		t.Fatalf("the page has a button that adds a task: %q", tt.Texts())
+	// No button adds a task, and no line says how: the context menus do.
+	if tt.HasText("添加任务") || tt.HasText("点右键") {
+		t.Fatalf("the page has a button that adds a task, or says how: %q", tt.Texts())
 	}
-	if !tt.HasText("今天没有要做的。点右键，选“新任务”来添加。") {
-		t.Errorf("a day without tasks does not say how one is added: %q", tt.Texts())
-	}
-	click(t, tt, "按周", "下一周")
-	if !tt.HasText("这里还没有任务。点右键，选“新任务”来添加。") {
-		t.Errorf("a week without tasks does not say how one is added: %q", tt.Texts())
-	}
-	click(t, tt, "今天")
 	newTask(t, tt)
 	if !tt.HasText("任务标题") {
 		t.Fatalf("no dialog after 新任务: %q", tt.Texts())

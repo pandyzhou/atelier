@@ -185,7 +185,7 @@ func (t *Todo) main(c *ui.Context) {
 }
 
 func (t *Todo) emptyText() string {
-	return "这里还没有任务。点右键，选“新任务”来添加。"
+	return "这里还没有任务。"
 }
 
 // heading is the view's name, a line about it, and what acts on the view as
@@ -375,9 +375,7 @@ func (t *Todo) group(c *ui.Context, g group) {
 			}
 		}
 		if len(g.tasks) == 0 {
-			// The one place that says how a task is added, as no button
-			// does: it shows while there is nothing to do today.
-			ui.Text(c, "今天没有要做的。点右键，选“新任务”来添加。").Padding(6, 8).FontSize(14).TextColor(mallow.Muted)
+			ui.Text(c, "今天没有要做的").Padding(6, 8).FontSize(14).TextColor(mallow.Muted)
 		}
 	})
 }
