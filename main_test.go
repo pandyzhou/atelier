@@ -2039,3 +2039,88 @@ func TestTimetableOnlyShows(t *testing.T) {
 	click(t, tt, "取消", "完成编辑")
 	shows("after the changing is done")
 }
+
+// TestReminders checks that a course is reminded of once, a lead before it
+// starts, on its day, with how long there is left; sooner when the app
+// began to run after that; not once it has begun, nor with the reminders
+// off; and that the settings turn them off and set the lead.
+func TestReminders(t *testing.T) {
+	a := newTodoApp(store.Open(t.TempDir()))
+	a.win = &fakeWindow{}
+	tb := a.table()
+	for i, at := range []string{"08:20", "9：05", "10:00"} {
+		tb.SetTime(i+1, timetable.Period{Start: at, End: "23:00"})
+	}
+	// 2030-01-07 is a Monday.
+	for _, k := range []timetable.Course{
+		{Name: "高等数学", Room: "A301", Teacher: "王老师", Day: 0, From: 1, To: 2},
+		{Name: "大学英语", Day: 0, From: 3, To: 3},
+		{Name: "体育", Day: 1, From: 1, To: 1},
+		{Name: "没有时间的课", Day: 0, From: 5, To: 5},
+	} {
+		if _, err := tb.Put(k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var sent []string
+	clock := time.Date(2030, 1, 7, 7, 0, 0, 0, time.Local)
+	a.reminders.now = func() time.Time { return clock }
+	a.reminders.notify = func(id, title, body string) { sent = append(sent, title+"|"+body) }
+	at := func(hour, minute, second int) []string {
+		t.Helper()
+		clock = time.Date(2030, 1, 7, hour, minute, second, 0, time.Local)
+		sent = nil
+		a.remind()
+		return sent
+	}
+	if got := at(7, 0, 0); len(got) != 0 {
+		t.Errorf("at 7:00: %q", got)
+	}
+	if got := at(7, 59, 50); len(got) != 0 {
+		t.Errorf("just before the reminder is due: %q", got)
+	}
+	if got := at(8, 0, 10); len(got) != 1 || got[0] != "20 分钟后上课：高等数学|第 1–2 节  08:20–23:00 · A301 · 王老师" {
+		t.Errorf("when the reminder is due: %q", got)
+	}
+	if got := at(8, 0, 30); len(got) != 0 {
+		t.Errorf("the reminder comes again: %q", got)
+	}
+	// After a long sleep what began meanwhile is not reminded of, and what
+	// starts within the lead is, with what is left.
+	if got := at(9, 50, 0); len(got) != 1 || !strings.HasPrefix(got[0], "10 分钟后上课：大学英语|") {
+		t.Errorf("after sleeping past a reminder: %q", got)
+	}
+	if got := at(10, 30, 0); len(got) != 0 {
+		t.Errorf("after the courses began: %q", got)
+	}
+
+	// The settings: a shorter lead, and none at all.
+	tt := ui.NewTester(a.view, 1280, 800)
+	click(t, tt, "设置", "通用")
+	if !tt.HasText("上课提醒") || shown(tt, "提前几分钟") == 0 || shown(tt, "20") == 0 {
+		t.Fatalf("the reminders' settings: %q", tt.Texts())
+	}
+	click(t, tt, "5")
+	if a.settings.RemindLead != 5 {
+		t.Fatalf("after choosing 5: %d", a.settings.RemindLead)
+	}
+	a.reminders.last = time.Time{}
+	if got := at(8, 0, 10); len(got) != 0 {
+		t.Errorf("twenty minutes before, with a lead of five: %q", got)
+	}
+	if got := at(8, 15, 5); len(got) != 1 || !strings.HasPrefix(got[0], "5 分钟后上课：高等数学") {
+		t.Errorf("five minutes before: %q", got)
+	}
+	click(t, tt, "开启上课提醒")
+	tt.Frame()
+	if !a.settings.RemindOff || tt.HasText("提前几分钟") {
+		t.Fatalf("after turning the reminders off: %v, %q", a.settings.RemindOff, tt.Texts())
+	}
+	a.reminders.last = time.Time{}
+	if got := at(8, 15, 5); len(got) != 0 {
+		t.Errorf("with the reminders off: %q", got)
+	}
+	if b := newApp(store.Open(a.store.Dir())); !b.settings.RemindOff || b.settings.RemindLead != 5 {
+		t.Errorf("after a restart: %+v", b.settings)
+	}
+}

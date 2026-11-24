@@ -92,24 +92,29 @@ type settings struct {
 	// CloseQuits makes closing the window quit the app. Without it, the
 	// window hides and the app stays in the notification area.
 	CloseQuits bool `json:"closeQuits,omitempty"`
+	// RemindOff has the app not remind of courses, and RemindLead is how
+	// many minutes before one its reminder comes: defaultLead when 0.
+	RemindOff  bool `json:"remindOff,omitempty"`
+	RemindLead int  `json:"remindLead,omitempty"`
 }
 
 // app is the shell: a title bar, a sidebar of features and the chosen one's
 // page.
 type app struct {
-	store    *store.Store
-	settings settings
-	features []feature.Feature
-	selected string       // the ID of the feature shown, or settingsID
-	before   string       // the feature the settings were opened from
-	section  string       // the part of the settings shown
-	fonts    []fontChoice // the fonts to choose from, once the settings asked
-	webFonts fontsState   // the fonts downloaded, and the one on its way
-	box      *secret.Box  // seals the models' keys
-	models   modelsState  // what the models' part of the settings shows
-	tray     trayState    // the icon in the notification area
-	updater  updater      // where new versions come from
-	update   updateState  // what is known of a newer version
+	store     *store.Store
+	settings  settings
+	features  []feature.Feature
+	selected  string       // the ID of the feature shown, or settingsID
+	before    string       // the feature the settings were opened from
+	section   string       // the part of the settings shown
+	fonts     []fontChoice // the fonts to choose from, once the settings asked
+	webFonts  fontsState   // the fonts downloaded, and the one on its way
+	box       *secret.Box  // seals the models' keys
+	models    modelsState  // what the models' part of the settings shows
+	tray      trayState    // the icon in the notification area
+	updater   updater      // where new versions come from
+	update    updateState  // what is known of a newer version
+	reminders reminders    // the reminders of courses
 	// ping tests a model's connection: llm.Ping, but in tests.
 	ping func(context.Context, llm.Config) error
 	// listModels asks a provider for its models: llm.ListModels, but in
@@ -353,7 +358,10 @@ type settingsSection struct {
 func (a *app) settingsSections() []settingsSection {
 	return []settingsSection{
 		{"look", "界面", a.lookSettings},
-		{"general", "通用", a.traySettings},
+		{"general", "通用", func(c *ui.Context, row func(name, note string, width float32, control func())) {
+			a.traySettings(c, row)
+			a.reminderSettings(c, row)
+		}},
 		{"models", "模型", a.modelSettings},
 		{"about", "关于", a.aboutSettings},
 	}
@@ -534,6 +542,7 @@ func main() {
 		a.restoreFont()
 		a.updater = mygoUpdater()
 		a.checkForUpdate(true)
+		a.startReminders()
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)

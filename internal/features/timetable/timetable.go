@@ -155,6 +155,56 @@ func (t *Timetable) SetPeriods(n int) {
 	t.save()
 }
 
+// Starts returns when a course starts on the day of a time, and whether
+// that is known: its first period has a start that reads as a time of day.
+func (t *Timetable) Starts(k *Course, day time.Time) (time.Time, bool) {
+	if k.From < 1 || k.From > len(t.data.Periods) {
+		return time.Time{}, false
+	}
+	// As it may have been typed: 8:20, 08：20 or 8.20.
+	text := strings.NewReplacer("：", ":", ".", ":", " ", "").Replace(t.data.Periods[k.From-1].Start)
+	clock, err := time.Parse("15:04", text)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return time.Date(day.Year(), day.Month(), day.Day(), clock.Hour(), clock.Minute(), 0, 0, day.Location()), true
+}
+
+// Due returns the courses to remind of now: those of now's day that have
+// not begun, and whose reminder, lead before they start, fell after the
+// time given and not after now.
+func (t *Timetable) Due(after, now time.Time, lead time.Duration) []*Course {
+	var due []*Course
+	for _, k := range t.data.Courses {
+		if k.Day != (int(now.Weekday())+6)%7 {
+			continue
+		}
+		start, ok := t.Starts(k, now)
+		if !ok || !start.After(now) {
+			continue
+		}
+		if at := start.Add(-lead); at.After(after) && !at.After(now) {
+			due = append(due, k)
+		}
+	}
+	return due
+}
+
+// Timed reports whether a period has a start set, by which courses can be
+// reminded of.
+func (t *Timetable) Timed() bool {
+	for _, p := range t.data.Periods {
+		if strings.TrimSpace(p.Start) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// When writes a course's periods and, when they have one, their time: "第
+// 1–2 节 08:00–09:40".
+func (t *Timetable) When(k *Course) string { return t.spanNote(k.From, k.To) }
+
 // SetTime sets when a period, from 1, starts and ends: nothing of one
 // there is not.
 func (t *Timetable) SetTime(period int, p Period) {
