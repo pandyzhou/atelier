@@ -109,6 +109,65 @@ func TestTodoContextMenus(t *testing.T) {
 	}
 }
 
+// A right click offers to add a task too: where there is no task, and on a
+// task, above what is done with that one. Not among the tasks done, where
+// none is added.
+func TestTodoNewFromContextMenu(t *testing.T) {
+	d, tt := newTodoTester(t)
+	// In the list, which is empty yet.
+	tt.RightClickAt(800, 500)
+	tt.Frame()
+	click(t, tt, "新任务")
+	if !tt.HasText("任务标题") {
+		t.Fatalf("no dialog after 新任务 in the list's menu: %q", tt.Texts())
+	}
+	tt.Type("Buy milk")
+	tt.Key(0, ui.KeyEnter)
+	if ks := d.Tasks(); len(ks) != 1 || ks[0].Title != "Buy milk" || ks[0].Due != d.Today() {
+		t.Fatalf("after adding from the list's menu: %+v", ks)
+	}
+	// On a task: its menu alone, not the list's under it too.
+	rightClick(t, tt, "打开Buy milk")
+	entries := 0
+	for _, text := range tt.Texts() {
+		if text == "新任务" {
+			entries++
+		}
+	}
+	// An entry shows twice among the texts: as its label, and as its text.
+	if entries != 2 {
+		t.Fatalf("新任务 shows %d times after a right click on a task, not as one entry: %q", entries, tt.Texts())
+	}
+	click(t, tt, "新任务")
+	if !tt.HasText("任务标题") {
+		t.Fatalf("no dialog after 新任务 in a task's menu: %q", tt.Texts())
+	}
+	tt.Type("Buy bread")
+	tt.Key(0, ui.KeyEnter)
+	if ks := d.Tasks(); len(ks) != 2 || ks[0].Title != "Buy milk" || ks[1].Title != "Buy bread" {
+		t.Fatalf("after adding from a task's menu: %+v", ks)
+	}
+	// Under the line, the task's own entries are chosen as before.
+	rightClick(t, tt, "打开Buy bread")
+	click(t, tt, "删除任务")
+	if ks := d.Tasks(); len(ks) != 1 || ks[0].Title != "Buy milk" {
+		t.Fatalf("after deleting from the menu that adds too: %+v", ks)
+	}
+
+	click(t, tt, "完成Buy milk", "已完成")
+	rightClick(t, tt, "打开Buy milk")
+	if !tt.HasText("标为未完成") || tt.HasText("新任务") {
+		t.Errorf("the menu of a task done: %q", tt.Texts())
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	tt.RightClickAt(800, 600)
+	tt.Frame()
+	if tt.HasText("新任务") {
+		t.Errorf("a right click among the tasks done offers to add one: %q", tt.Texts())
+	}
+}
+
 // Tasks are not sorted into lists and have no priority: nothing of either
 // shows, for a task that was saved with them too.
 func TestTodoNoListsOrPriority(t *testing.T) {

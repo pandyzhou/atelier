@@ -95,7 +95,11 @@ func (t *Todo) menuOpen(key string) *bool {
 	return t.ui.menus[key]
 }
 
-// taskMenu is what a right click on a task's row offers.
+// newEntry is the entry of a context menu that adds a task.
+var newEntry = mallow.MenuEntry{ID: "new", Label: "新任务", Glyph: mallow.GlyphPlus}
+
+// taskMenu is what a right click on a task's row offers: to add a task,
+// where the view takes new ones, then what is done with this one.
 func (t *Todo) taskMenu(c *ui.Context, row ui.Element, k *Task) {
 	today := t.Today()
 	check := mallow.MenuEntry{ID: "done", Label: "标为完成", Glyph: mallow.GlyphCheck}
@@ -106,14 +110,21 @@ func (t *Todo) taskMenu(c *ui.Context, row ui.Element, k *Task) {
 	if k.Repeat != RepeatNone {
 		repeat.Label = "取消重复"
 	}
-	switch mallow.ContextMenu(c, row, t.menuOpen("task:"+strconv.Itoa(k.ID)), []mallow.MenuEntry{
+	entries := []mallow.MenuEntry{
 		{ID: "edit", Label: "编辑", Glyph: mallow.GlyphEdit},
 		check,
 		repeat,
 		{ID: "today", Label: "改到今天", Glyph: mallow.GlyphCalendar},
 		{ID: "tomorrow", Label: "改到明天", Glyph: mallow.GlyphCalendar},
 		{ID: "delete", Label: "删除任务", Glyph: mallow.GlyphTrash, Danger: true},
-	}) {
+	}
+	if t.ui.view != viewDone {
+		// Above a line: it is not about this task.
+		entries = append([]mallow.MenuEntry{newEntry, {}}, entries...)
+	}
+	switch mallow.ContextMenu(c, row, t.menuOpen("task:"+strconv.Itoa(k.ID)), entries) {
+	case "new":
+		t.startAdding()
 	case "edit":
 		t.openTask(k.ID)
 	case "done":
@@ -159,7 +170,8 @@ func (t *Todo) main(c *ui.Context) {
 	ui.Column(c).Grow(1).MinWidth(0).Gap(20).Padding(24, 0, 0, 0).Children(func() {
 		ui.Column(c).PaddingX(28).Children(func() { t.heading(c, groups) })
 		ui.Column(c).Grow(1).MinHeight(0).Padding(0, 0, 8, 0).Children(func() {
-			ui.Scroll(c).Grow(1).Padding(4, 20, 16, 20).Gap(2).Children(func() {
+			list := ui.Scroll(c).Grow(1).Padding(4, 20, 16, 20).Gap(2)
+			list.Children(func() {
 				for i, g := range groups {
 					t.group(c.Key(i), g)
 				}
@@ -167,6 +179,12 @@ func (t *Todo) main(c *ui.Context) {
 					ui.Text(c, t.emptyText()).Padding(20, 4).FontSize(14).TextColor(mallow.Muted)
 				}
 			})
+			// A right click where there is no task offers to add one, in
+			// the views that take new ones.
+			if t.ui.view != viewDone &&
+				mallow.ContextMenu(c, list, t.menuOpen("list"), []mallow.MenuEntry{newEntry}) == newEntry.ID {
+				t.startAdding()
+			}
 		})
 	})
 }
