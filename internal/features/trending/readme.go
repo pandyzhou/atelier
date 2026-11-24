@@ -33,7 +33,12 @@ const maxReadme = 512 << 10
 // readme is a repository's README, as far as it has been read.
 type readme struct {
 	loading bool
-	text    string // as Markdown, tidied to show
+	text    string // as it was read
+	plain   bool   // it is not Markdown: it shows as it is written
+	// parts are the text tidied to show on a dark palette or a light one,
+	// whichever dark says they were made for.
+	parts   []part
+	dark    bool
 	file    string // where in the repository it is, as "docs/README.md"
 	problem string // why it could not be read
 	missing bool   // the repository has none
@@ -72,18 +77,84 @@ func (t *Trending) Open(name string) {
 			if !utf8.Valid(data) {
 				data = []byte(strings.ToValidUTF8(string(data), ""))
 			}
-			text := string(data)
-			if strings.HasSuffix(strings.ToLower(file), ".md") || strings.HasSuffix(file, ".markdown") {
-				text = Tidy(text)
-			} else {
-				// Not Markdown: as it is written.
-				text = "```\n" + strings.ReplaceAll(text, "```", "'''") + "\n```"
-			}
-			got = readme{text: text, file: file}
+			markdown := strings.HasSuffix(strings.ToLower(file), ".md") || strings.HasSuffix(file, ".markdown")
+			got = readme{text: string(data), file: file, plain: !markdown}
 			break
 		}
 		return func() { *r = got }
 	})
+}
+
+// part is a stretch of a README: Markdown, which its README has in the
+// middle of the page or, as most of it, at the left.
+type part struct {
+	text     string
+	centered bool
+}
+
+// shown returns the README as it shows on a dark palette or a light one:
+// tidied once for each, as the pictures some READMEs have for the two differ.
+func (r *readme) shown(dark bool) []part {
+	if r.parts != nil && r.dark == dark {
+		return r.parts
+	}
+	r.dark = dark
+	if r.plain {
+		// Not Markdown: as it is written.
+		r.parts = []part{{text: "```\n" + strings.ReplaceAll(r.text, "```", "'''") + "\n```"}}
+	} else {
+		r.parts = Parts(Tidy(r.text, dark))
+	}
+	return r.parts
+}
+
+// The marks Tidy leaves around what a README has in the middle of the page.
+const (
+	centerStart = "\uE000"
+	centerEnd   = "\uE001"
+)
+
+// Parts cuts what Tidy made into its stretches: what is between its marks
+// is centered, a paragraph to a part, so that each is in the middle by
+// itself; the rest is not.
+func Parts(text string) []part {
+	var parts []part
+	add := func(s string, centered bool) {
+		if s = strings.TrimSpace(s); s == "" {
+			return
+		}
+		if !centered {
+			parts = append(parts, part{text: s})
+			return
+		}
+		for _, block := range strings.Split(blank.ReplaceAllString(s, "\n\n"), "\n\n") {
+			// Its lines without the room they were written after, which
+			// would make code of them.
+			lines := strings.Split(block, "\n")
+			for i := range lines {
+				lines[i] = strings.TrimSpace(lines[i])
+			}
+			if block = strings.TrimSpace(strings.Join(lines, "\n")); block != "" {
+				parts = append(parts, part{text: block, centered: true})
+			}
+		}
+	}
+	for {
+		i := strings.Index(text, centerStart)
+		if i < 0 {
+			break
+		}
+		add(text[:i], false)
+		text = text[i+len(centerStart):]
+		j := strings.Index(text, centerEnd)
+		if j < 0 {
+			j = len(text)
+		}
+		add(text[:j], true)
+		text = strings.TrimPrefix(text[j:], centerEnd)
+	}
+	add(strings.ReplaceAll(text, centerEnd, ""), false)
+	return parts
 }
 
 // Close goes back from a repository's page to the list.
@@ -266,20 +337,23 @@ func attribute(in, name string) string {
 // Tidy makes of a README's Markdown, which may be written with HTML, as
 // GitHub lets it be, Markdown alone: its pictures, links and headings as
 // Markdown's, and the other tags gone, since what shows it shows them as
-// they are written. Code is left as it is.
-func Tidy(src string) string {
+// they are written. Code is left as it is. What the README has in the
+// middle of the page is between marks, for Parts; of pictures it has one of
+// for dark pages and one for light ones, it keeps the one for dark's.
+func Tidy(src string, dark bool) string {
 	src = strings.ReplaceAll(src, "\r\n", "\n")
+	src = strings.NewReplacer(centerStart, "", centerEnd, "").Replace(src)
 	var out strings.Builder
 	// Between the fences of code blocks, and outside the code in a line.
 	inCode, at := false, 0
 	prose := func(s string) {
 		last := 0
 		for _, m := range code.FindAllStringIndex(s, -1) {
-			out.WriteString(tidy(s[last:m[0]]))
+			out.WriteString(tidy(s[last:m[0]], dark))
 			out.WriteString(s[m[0]:m[1]])
 			last = m[1]
 		}
-		out.WriteString(tidy(s[last:]))
+		out.WriteString(tidy(s[last:], dark))
 	}
 	for _, m := range fence.FindAllStringIndex(src, -1) {
 		if !inCode {
@@ -297,14 +371,57 @@ func Tidy(src string) string {
 	return strings.TrimSpace(blank.ReplaceAllString(out.String(), "\n\n"))
 }
 
+// What tidy reads of pictures made for one palette, and of what is centered.
+var (
+	pictured = regexp.MustCompile(`(?is)<picture\b[^>]*>(.*?)</picture>`)
+	sourced  = regexp.MustCompile(`(?is)<source\b[^>]*>`)
+	centered = []*regexp.Regexp{
+		regexp.MustCompile(`(?is)<center\b[^>]*>(.*?)</center>`),
+		regexp.MustCompile(`(?is)<p\b[^>]*\balign\s*=\s*["']?center\b[^>]*>(.*?)</p>`),
+		regexp.MustCompile(`(?is)<div\b[^>]*\balign\s*=\s*["']?center\b[^>]*>(.*?)</div>`),
+	}
+	centeredTitle = regexp.MustCompile(`(?is)<h([1-6])\b[^>]*\balign\s*=\s*["']?center\b[^>]*>(.*?)</h[1-6]>`)
+)
+
 // tidy is Tidy for text that holds no code.
-func tidy(s string) string {
+func tidy(s string, dark bool) string {
 	s = comment.ReplaceAllString(s, "")
+	// Of a picture with sources for dark pages or light ones, the one for
+	// the page that shows: its img's, unless a source is for this page.
+	s = pictured.ReplaceAllStringFunc(s, func(whole string) string {
+		img := image.FindString(whole)
+		if img == "" {
+			return ""
+		}
+		for _, source := range sourced.FindAllString(whole, -1) {
+			media, set := strings.ToLower(attribute(source, "media")), strings.Fields(attribute(source, "srcset"))
+			if len(set) > 0 && ((dark && strings.Contains(media, "dark")) || (!dark && strings.Contains(media, "light"))) {
+				at := strings.TrimSuffix(set[0], ",")
+				return regexp.MustCompile(`(?is)\bsrc\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`).ReplaceAllLiteralString(img, `src="`+at+`"`)
+			}
+		}
+		return img
+	})
+	// What is in the middle of the page, between the marks: a heading
+	// there stays one.
+	s = centeredTitle.ReplaceAllString(s, "\n\n"+centerStart+"\n<h$1>$2</h$1>\n"+centerEnd+"\n\n")
+	for _, c := range centered {
+		s = c.ReplaceAllString(s, "\n\n"+centerStart+"\n$1\n"+centerEnd+"\n\n")
+	}
 	// A line that only held such a tag would be left empty, and part the
 	// paragraph around it in two.
 	s = alone.ReplaceAllString(s, "")
 	s = image.ReplaceAllStringFunc(s, func(tag string) string {
 		src := attribute(tag, "src")
+		// GitHub shows a picture whose address ends so on dark pages only,
+		// or on light ones only.
+		for mark, forDark := range map[string]bool{"#gh-dark-mode-only": true, "#gh-light-mode-only": false} {
+			if rest, ok := strings.CutSuffix(src, mark); ok {
+				if src = rest; forDark != dark {
+					return ""
+				}
+			}
+		}
 		if src == "" {
 			return ""
 		}

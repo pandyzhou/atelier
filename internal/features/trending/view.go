@@ -198,8 +198,17 @@ func (t *Trending) page(c *ui.Context, r Repo) {
 	// The room at its right is the scroll bar's.
 	ui.Scroll(c.Key("readme:"+r.Name)).Label("README").Grow(1).MinHeight(0).Padding(4, 24, 24, 28).Children(func() {
 		ui.Row(c).Justify(ui.Center).Children(func() {
-			ui.Column(c).Grow(1).MinWidth(0).MaxWidth(860).Children(func() {
-				t.ui.doc.View(c, about.text)
+			ui.Column(c).Grow(1).MinWidth(0).MaxWidth(860).Gap(12).Children(func() {
+				for i, p := range about.shown(mallow.IsDark()) {
+					if !p.centered {
+						t.ui.doc.View(c.Key(i), p.text)
+						continue
+					}
+					// In the middle, as its README has it.
+					ui.Column(c.Key(i)).AlignItems(ui.Center).TextAlign(ui.Center).Children(func() {
+						t.ui.doc.View(c, p.text)
+					})
+				}
 			})
 		})
 	})

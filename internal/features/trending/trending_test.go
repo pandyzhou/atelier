@@ -2,6 +2,7 @@ package trending
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -67,15 +68,32 @@ func TestTidy(t *testing.T) {
 		"Use `Map<K, V>` and <kbd>Ctrl</kbd>, not <span style=\"color:red\">this</span>.\n\n" +
 		"```html\n<p align=\"center\"><img src=\"x.png\"></p>\n```\n\n" +
 		"<details><summary>More</summary>\n\n- one\n\n</details>\n\n" +
-		"<p align=\"center\">\n  <img src=\"a.svg\" height=\"28\" />&nbsp;&nbsp;\n  <picture>\n    <source media=\"(prefers-color-scheme: dark)\" srcset=\"b-dark.svg\" />\n    <img src=\"b.svg\" height=\"28\" />\n  </picture>&nbsp;&nbsp;\n  <img src=\"c.png\" height=\"28\" />\n</p>\n"
-	want := "# ![Logo](docs/logo%20dark.png#shown-at=120x0) Tiny\n\n" +
-		"[![CI](https://img.example.com/ci.svg)](https://example.com/ci)\n[Read the **guide**](docs/guide.md)\n\n" +
+		"<p align=\"center\">\n  <img src=\"a.svg\" height=\"28\" />&nbsp;&nbsp;\n  <picture>\n    <source media=\"(prefers-color-scheme: dark)\" srcset=\"b-dark.svg\" />\n    <img src=\"b.svg\" height=\"28\" />\n  </picture>&nbsp;&nbsp;\n  <img src=\"c.png\" height=\"28\" />\n  <img src=\"sun.png#gh-light-mode-only\"><img src=\"moon.png#gh-dark-mode-only\">\n</p>\n"
+	// What was centered is a part for each of its paragraphs, marked; the
+	// rest is not.
+	show := func(dark bool) string {
+		var b strings.Builder
+		for _, p := range Parts(Tidy(src, dark)) {
+			if p.centered {
+				b.WriteString("[centered]\n")
+			}
+			b.WriteString(p.text + "\n---\n")
+		}
+		return b.String()
+	}
+	want := "[centered]\n# ![Logo](docs/logo%20dark.png#shown-at=120x0) Tiny\n---\n" +
+		"[centered]\n[![CI](https://img.example.com/ci.svg)](https://example.com/ci)\n[Read the **guide**](docs/guide.md)\n---\n" +
 		"Use `Map<K, V>` and `Ctrl`, not this.\n\n" +
 		"```html\n<p align=\"center\"><img src=\"x.png\"></p>\n```\n\n" +
-		"More\n\n- one\n\n" +
-		"  ![](a.svg#shown-at=0x28)&nbsp;&nbsp;\n![](b.svg#shown-at=0x28)\n  &nbsp;&nbsp;\n  ![](c.png#shown-at=0x28)"
-	if got := Tidy(src); got != want {
-		t.Errorf("tidied to:\n%s\n\nwant:\n%s", got, want)
+		"More\n\n- one\n---\n" +
+		"[centered]\n![](a.svg#shown-at=0x28)&nbsp;&nbsp;\n![](b.svg#shown-at=0x28)&nbsp;&nbsp;\n![](c.png#shown-at=0x28)\n![](sun.png)\n---\n"
+	if got := show(false); got != want {
+		t.Errorf("for a light page, tidied to:\n%s\n\nwant:\n%s", got, want)
+	}
+	// On a dark page the pictures made for one show in place of the others.
+	dark := strings.NewReplacer("b.svg#shown-at=0x28", "b-dark.svg#shown-at=0x28", "sun.png", "moon.png").Replace(want)
+	if got := show(true); got != dark {
+		t.Errorf("for a dark page, tidied to:\n%s\n\nwant:\n%s", got, dark)
 	}
 }
 
