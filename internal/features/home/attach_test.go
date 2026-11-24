@@ -1,8 +1,10 @@
 package home
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"image"
 	"image/color"
 	"image/gif"
@@ -131,7 +133,7 @@ func TestReadText(t *testing.T) {
 		data []byte
 		want string
 	}{
-		{"a program", []byte{0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0xFF, 0xFF}, "不是图片，也不是文本文件"},
+		{"a program", []byte{0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0xFF, 0xFF}, "不是图片、文档，也不是文本文件"},
 		{"nothing", []byte("  \n"), "是空的"},
 		{"too much", bytes.Repeat([]byte("字"), maxText), "太长了"},
 	} {
@@ -152,5 +154,84 @@ func TestReadText(t *testing.T) {
 	}
 	if p, err := load(path); err != nil || p.Name != "笔记.md" || p.Text != "# 笔记" {
 		t.Errorf("a file of text: %+v, %v", p, err)
+	}
+}
+
+// madePDF is a PDF of one page that draws what content says, in Helvetica.
+func madePDF(content string) []byte {
+	objects := []string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+		fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(content), content),
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+	}
+	var b bytes.Buffer
+	b.WriteString("%PDF-1.4\n")
+	offsets := make([]int, len(objects))
+	for i, o := range objects {
+		offsets[i] = b.Len()
+		fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", i+1, o)
+	}
+	start := b.Len()
+	fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f \n", len(objects)+1)
+	for _, o := range offsets {
+		fmt.Fprintf(&b, "%010d 00000 n \n", o)
+	}
+	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, start)
+	return b.Bytes()
+}
+
+// madeWord is a .docx, or another file of the kind, with body as the XML
+// of the part named part.
+func madeWord(t *testing.T, part, body string) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	z := zip.NewWriter(&b)
+	w, err := z.Create(part)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>%s</w:body></w:document>`, body)
+	if err := z.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+// TestReadDocuments checks that a PDF and a Word document are sent as the
+// text they hold, line by line, and what is said of those that have none
+// or are of a kind that is not read.
+func TestReadDocuments(t *testing.T) {
+	// Two lines, the first of two pieces far apart, as columns are; drawn
+	// the lower line first.
+	page := "BT /F1 12 Tf 72 700 Td (Tuesday English) Tj 0 20 Td (Monday Math) Tj 200 0 Td (Room A301) Tj ET"
+	p, err := read("课表.pdf", madePDF(page))
+	if err != nil || p.Type != "" || p.Text != "Monday Math Room A301\nTuesday English" {
+		t.Errorf("a PDF: %q, %v", p.Text, err)
+	}
+	if _, err := read("扫描.pdf", madePDF("0 0 m 10 10 l S")); err == nil || !strings.Contains(err.Error(), "可能是扫描件") {
+		t.Errorf("a PDF without text: %v", err)
+	}
+	if _, err := read("坏的.pdf", []byte("%PDF-1.4\nnothing of a PDF")); err == nil || !strings.Contains(err.Error(), "读不出来") {
+		t.Errorf("a broken PDF: %v", err)
+	}
+
+	body := `<w:p><w:r><w:t>第一周</w:t></w:r><w:r><w:t xml:space="preserve"> 安排</w:t></w:r></w:p>` +
+		`<w:p><w:r><w:instrText>PAGE</w:instrText></w:r><w:r><w:t>交报告</w:t><w:tab/><w:t>周三</w:t><w:br/><w:t>地点待定</w:t></w:r></w:p>` +
+		`<w:tbl><w:tr><w:tc><w:p><w:r><w:t>周一</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>高数</w:t></w:r></w:p></w:tc></w:tr>` +
+		`<w:tr><w:tc><w:p><w:r><w:t>周二</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>英语</w:t></w:r></w:p></w:tc></w:tr></w:tbl>`
+	p, err = read("安排.docx", madeWord(t, "word/document.xml", body))
+	if want := "第一周 安排\n交报告\t周三\n地点待定\n周一\t高数\n周二\t英语"; err != nil || p.Text != want {
+		t.Errorf("a Word document: %q, %v", p.Text, err)
+	}
+	if _, err := read("空的.docx", madeWord(t, "word/document.xml", "<w:p/>")); err == nil || !strings.Contains(err.Error(), "里没有文字") {
+		t.Errorf("a Word document without text: %v", err)
+	}
+	if _, err := read("表格.xlsx", madeWord(t, "xl/workbook.xml", "")); err == nil || !strings.Contains(err.Error(), "还读不了") {
+		t.Errorf("a spreadsheet: %v", err)
+	}
+	if _, err := read("旧的.doc", []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}); err == nil || !strings.Contains(err.Error(), "另存为 .docx") {
+		t.Errorf("an old Word document: %v", err)
 	}
 }

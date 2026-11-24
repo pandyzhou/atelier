@@ -76,7 +76,8 @@ func load(path string) (pending, error) {
 }
 
 // read makes of a file's data what is sent of it: a picture, no larger
-// than a model looks at, or the text it holds.
+// than a model looks at, or the text it holds, a PDF's and a Word
+// document's too.
 func read(name string, data []byte) (pending, error) {
 	if cfg, format, err := image.DecodeConfig(bytes.NewReader(data)); err == nil {
 		if float64(cfg.Width)*float64(cfg.Height) > maxPixels {
@@ -88,14 +89,20 @@ func read(name string, data []byte) (pending, error) {
 		}
 		return pending{Name: name, Type: kind, Data: data}, nil
 	}
-	text, ok := decodeText(data)
+	text, ok, err := document(name, data)
+	if err != nil {
+		return pending{}, err
+	}
+	if !ok {
+		text, ok = decodeText(data)
+	}
 	switch {
 	case !ok:
-		return pending{}, fmt.Errorf("“%s”不是图片，也不是文本文件", name)
+		return pending{}, fmt.Errorf("“%s”不是图片、文档，也不是文本文件", name)
 	case strings.TrimSpace(text) == "":
 		return pending{}, fmt.Errorf("“%s”是空的", name)
 	case len(text) > maxText:
-		return pending{}, fmt.Errorf("“%s”太长了，文本最多 200 KB", name)
+		return pending{}, fmt.Errorf("“%s”太长了，文字最多 200 KB", name)
 	}
 	return pending{Name: name, Text: text}, nil
 }

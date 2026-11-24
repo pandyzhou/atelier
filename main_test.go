@@ -1660,7 +1660,7 @@ func TestAttachments(t *testing.T) {
 		t.Fatal("the page does not take dropped files")
 	}
 	tt.Frame()
-	if !tt.HasText("笔记.txt") || !tt.HasText("“程序.exe”不是图片，也不是文本文件") {
+	if !tt.HasText("笔记.txt") || !tt.HasText("“程序.exe”不是图片、文档，也不是文本文件") {
 		t.Fatalf("after the drop: %q", tt.Texts())
 	}
 	saved := func() []string {
