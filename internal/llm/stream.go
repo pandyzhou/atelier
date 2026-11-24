@@ -13,11 +13,16 @@ import (
 // Stream is Complete with the answer's text given to onText piece by piece
 // as it comes, off the caller's thread; the message returned is the whole
 // of it. A service that answers all at once all the same gives its text in
-// one piece. The error is an *Error; onText may have had text before it.
+// one piece. What the model thinks goes to the request's OnThinking the
+// same way. The error is an *Error; onText may have had text before it.
 func Stream(ctx context.Context, c Config, r Request, onText func(string)) (Message, error) {
 	c, body, read, err := prepare(c, r)
 	if err != nil {
 		return Message{}, err
+	}
+	onThinking := r.OnThinking
+	if onThinking == nil {
+		onThinking = func(string) {}
 	}
 	var events stream
 	switch c.Kind {
@@ -56,6 +61,9 @@ func Stream(ctx context.Context, c Config, r Request, onText func(string)) (Mess
 			return Message{}, netError(err)
 		}
 		m, err := finish(c, read, text, resp.StatusCode)
+		if err == nil && m.Thinking != "" {
+			onThinking(m.Thinking)
+		}
 		if err == nil && m.Text != "" {
 			onText(m.Text)
 		}
@@ -66,7 +74,7 @@ func Stream(ctx context.Context, c Config, r Request, onText func(string)) (Mess
 		line, err := lines.ReadString('\n')
 		if event, ok := strings.CutPrefix(strings.TrimSpace(line), "data:"); ok {
 			if event = strings.TrimSpace(event); event != "" && event != "[DONE]" {
-				if failed := events.add([]byte(event), onText); failed != nil {
+				if failed := events.add([]byte(event), onText, onThinking); failed != nil {
 					return Message{}, failed
 				}
 			}
@@ -83,9 +91,10 @@ func Stream(ctx context.Context, c Config, r Request, onText func(string)) (Mess
 
 // stream puts the events of a streamed answer together.
 type stream interface {
-	// add takes an event's data, giving onText the text it brings; the
-	// error is what the service says went wrong.
-	add(event []byte, onText func(string)) *Error
+	// add takes an event's data, giving onText the text it brings and
+	// onThinking the thinking; the error is what the service says went
+	// wrong.
+	add(event []byte, onText, onThinking func(string)) *Error
 	// whole returns the answer as the service would have sent it at once.
 	whole() []byte
 }
@@ -127,7 +136,7 @@ type anthropicStream struct {
 	inputs map[int]*strings.Builder // the JSON of tools' inputs, as it comes
 }
 
-func (s *anthropicStream) add(event []byte, onText func(string)) *Error {
+func (s *anthropicStream) add(event []byte, onText, onThinking func(string)) *Error {
 	if err := streamError(event); err != nil {
 		return err
 	}
@@ -174,6 +183,9 @@ func (s *anthropicStream) add(event []byte, onText func(string)) *Error {
 			s.inputs[v.Index].WriteString(v.Delta.JSON)
 		case "thinking_delta":
 			b["thinking"] = text(b, "thinking") + v.Delta.Thinking
+			if v.Delta.Thinking != "" {
+				onThinking(v.Delta.Thinking)
+			}
 		case "signature_delta":
 			b["signature"] = v.Delta.Signature
 		}
@@ -204,8 +216,10 @@ func (s *anthropicStream) whole() []byte {
 
 type chatStream struct {
 	content, reasoning strings.Builder
-	reasoned           bool
-	calls              []*chatCall
+	// reasoned is the name the service gives the model's thinking under,
+	// "" until it gave some.
+	reasoned string
+	calls    []*chatCall
 }
 
 type chatCall struct {
@@ -213,7 +227,7 @@ type chatCall struct {
 	arguments strings.Builder
 }
 
-func (s *chatStream) add(event []byte, onText func(string)) *Error {
+func (s *chatStream) add(event []byte, onText, onThinking func(string)) *Error {
 	if err := streamError(event); err != nil {
 		return err
 	}
@@ -222,6 +236,7 @@ func (s *chatStream) add(event []byte, onText func(string)) *Error {
 			Delta struct {
 				Content   *string `json:"content"`
 				Reasoning *string `json:"reasoning_content"`
+				Reasoned  *string `json:"reasoning"`
 				ToolCalls []struct {
 					Index    int    `json:"index"`
 					ID       string `json:"id"`
@@ -237,9 +252,16 @@ func (s *chatStream) add(event []byte, onText func(string)) *Error {
 		return nil
 	}
 	d := v.Choices[0].Delta
-	if d.Reasoning != nil {
-		s.reasoned = true
-		s.reasoning.WriteString(*d.Reasoning)
+	thought, name := d.Reasoning, "reasoning_content"
+	if thought == nil {
+		thought, name = d.Reasoned, "reasoning"
+	}
+	if thought != nil {
+		s.reasoned = name
+		s.reasoning.WriteString(*thought)
+		if *thought != "" {
+			onThinking(*thought)
+		}
 	}
 	if d.Content != nil && *d.Content != "" {
 		s.content.WriteString(*d.Content)
@@ -264,8 +286,8 @@ func (s *chatStream) add(event []byte, onText func(string)) *Error {
 
 func (s *chatStream) whole() []byte {
 	msg := map[string]any{"role": "assistant", "content": s.content.String()}
-	if s.reasoned {
-		msg["reasoning_content"] = s.reasoning.String()
+	if s.reasoned != "" {
+		msg[s.reasoned] = s.reasoning.String()
 	}
 	var calls []map[string]any
 	for _, call := range s.calls {
@@ -291,7 +313,7 @@ type responsesStream struct {
 	output json.RawMessage
 }
 
-func (s *responsesStream) add(event []byte, onText func(string)) *Error {
+func (s *responsesStream) add(event []byte, onText, onThinking func(string)) *Error {
 	if err := streamError(event); err != nil {
 		return err
 	}
@@ -311,6 +333,12 @@ func (s *responsesStream) add(event []byte, onText func(string)) *Error {
 		if v.Delta != "" {
 			onText(v.Delta)
 		}
+	case "response.reasoning_summary_text.delta":
+		if v.Delta != "" {
+			onThinking(v.Delta)
+		}
+	case "response.reasoning_summary_part.done":
+		onThinking("\n\n")
 	case "response.output_item.done":
 		if len(v.Item) > 0 {
 			s.items = append(s.items, v.Item)

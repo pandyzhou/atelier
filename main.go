@@ -39,6 +39,18 @@ func (a *app) makeFeatures(s *store.Store) []feature.Feature {
 			Background: a.background,
 			OnUI:       a.onUI,
 			PickFiles:  a.pickFiles,
+			Effort:     func() string { return a.settings.Efforts[a.effortKey()] },
+			SetEffort: func(effort string) {
+				if a.settings.Efforts == nil {
+					a.settings.Efforts = map[string]string{}
+				}
+				if effort == "" {
+					delete(a.settings.Efforts, a.effortKey())
+				} else {
+					a.settings.Efforts[a.effortKey()] = effort
+				}
+				a.saveSettings()
+			},
 			OpenSettings: func() {
 				if a.selected != settingsID {
 					a.before = a.selected
@@ -51,6 +63,10 @@ func (a *app) makeFeatures(s *store.Store) []feature.Feature {
 		tasks.Calendar(),
 	}
 }
+
+// effortKey names the default model among the Efforts: its provider's ID
+// and its name.
+func (a *app) effortKey() string { return fmt.Sprintf("%d/%s", a.settings.Model, a.settings.ModelName) }
 
 // settings are the shell's own preferences, saved as settings.json.
 type settings struct {
@@ -69,7 +85,10 @@ type settings struct {
 	Model  int           `json:"model,omitempty"`
 	// ModelName is the default model, of the provider Model is the ID of.
 	ModelName string `json:"modelName,omitempty"`
-	NextModel int    `json:"nextModel,omitempty"`
+	// Efforts are how hard models are asked to think, by effortKey: one
+	// that is not there is left to think as it does.
+	Efforts   map[string]string `json:"efforts,omitempty"`
+	NextModel int               `json:"nextModel,omitempty"`
 	// CloseQuits makes closing the window quit the app. Without it, the
 	// window hides and the app stays in the notification area.
 	CloseQuits bool `json:"closeQuits,omitempty"`

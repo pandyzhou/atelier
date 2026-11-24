@@ -339,22 +339,28 @@ func TestStream(t *testing.T) {
 			`{"choices":[],"usage":{}}`) + "data: [DONE]\n\n", "hm"},
 		{Responses, events(
 			`{"type":"response.created","response":{"output":[],"error":null}}`,
-			`{"type":"response.output_item.done","item":{"type":"reasoning","id":"r1","summary":[]}}`,
+			`{"type":"response.reasoning_summary_text.delta","delta":"h"}`,
+			`{"type":"response.reasoning_summary_text.delta","delta":"m"}`,
+			`{"type":"response.output_item.done","item":{"type":"reasoning","id":"r1","summary":[{"type":"summary_text","text":"hm"}]}}`,
 			`{"type":"response.output_text.delta","delta":"你"}`,
 			`{"type":"response.output_text.delta","delta":"好"}`,
 			`{"type":"response.output_item.done","item":{"type":"message","content":[{"type":"output_text","text":"你好"}]}}`,
 			`{"type":"response.function_call_arguments.delta","delta":"{\"title\":"}`,
 			`{"type":"response.output_item.done","item":{"type":"function_call","call_id":"c1","name":"add_task","arguments":"{\"title\":\"x\"}"}}`,
-			`{"type":"response.completed","response":{"error":null,"output":[{"type":"reasoning","id":"r1","summary":[]},{"type":"message","content":[{"type":"output_text","text":"你好"}]},{"type":"function_call","call_id":"c1","name":"add_task","arguments":"{\"title\":\"x\"}"}]}}`), "r1"},
+			`{"type":"response.completed","response":{"error":null,"output":[{"type":"reasoning","id":"r1","summary":[{"type":"summary_text","text":"hm"}]},{"type":"message","content":[{"type":"output_text","text":"你好"}]},{"type":"function_call","call_id":"c1","name":"add_task","arguments":"{\"title\":\"x\"}"}]}}`), "r1"},
 	} {
 		s := newService(t, 200, c.answer)
 		s.ctype = "text/event-stream"
 		cfg := Config{Kind: c.kind, BaseURL: s.URL, Key: "k", Model: "m"}
-		req := Request{Messages: []Message{{Role: User, Text: "加个任务"}}}
-		var pieces []string
+		var pieces, thoughts []string
+		req := Request{Messages: []Message{{Role: User, Text: "加个任务"}}, OnThinking: func(p string) { thoughts = append(thoughts, p) }}
 		got, err := Stream(ctx(t), cfg, req, func(p string) { pieces = append(pieces, p) })
 		if err != nil {
 			t.Fatalf("%s: %v", c.kind, err)
+		}
+		// What the model thought comes as it does, and is in the message.
+		if strings.Join(thoughts, "") != "hm" || got.Thinking != "hm" {
+			t.Errorf("%s: the thinking came as %q, and is %q in the message", c.kind, thoughts, got.Thinking)
 		}
 		if strings.Join(pieces, "|") != "你|好" {
 			t.Errorf("%s: the text came as %q", c.kind, pieces)
@@ -453,6 +459,73 @@ func TestImages(t *testing.T) {
 		}
 		if sent, _ = json.Marshal(s.body); !strings.Contains(string(sent), `"content":"这是什么"`) {
 			t.Errorf("%s: without the picture's data the request is %s", c.kind, sent)
+		}
+	}
+}
+
+// TestEffort checks how each kind of service is asked to think with an
+// effort, that nothing is said of it without one, and that thinking under
+// the other name some services give it is read.
+func TestEffort(t *testing.T) {
+	for _, c := range []struct {
+		kind         Kind
+		model, done  string
+		wants, lacks []string
+	}{
+		{Chat, "m", `{"choices":[{"message":{"role":"assistant","content":"好","reasoning":"hm"}}]}`,
+			[]string{`"reasoning_effort":"high"`}, nil},
+		{Responses, "m", `{"output":[{"type":"reasoning","summary":[{"text":"h"},{"text":"m"}]},{"type":"message","content":[{"type":"output_text","text":"好"}]}]}`,
+			[]string{`"reasoning":{"effort":"high","summary":"auto"}`}, nil},
+		{Anthropic, "claude-opus-5-5", `{"content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"好"}]}`,
+			[]string{`"thinking":{"display":"summarized","type":"adaptive"}`, `"output_config":{"effort":"high"}`, `"max_tokens":16000`}, []string{"budget_tokens"}},
+		{Anthropic, "claude-sonnet-4-5", `{"content":[{"type":"text","text":"好"}]}`,
+			[]string{`"thinking":{"budget_tokens":16384,"type":"enabled"}`, `"max_tokens":20480`}, []string{"output_config"}},
+		{Anthropic, "claude-opus-4-20250514", `{"content":[{"type":"text","text":"好"}]}`,
+			[]string{`"budget_tokens":16384`}, []string{"output_config"}},
+		{Anthropic, "deepseek-reasoner", `{"content":[{"type":"text","text":"好"}]}`,
+			[]string{`"budget_tokens":16384`}, []string{"output_config"}},
+	} {
+		s := newService(t, 200, c.done)
+		cfg := Config{Kind: c.kind, BaseURL: s.URL, Key: "k", Model: c.model}
+		got, err := Complete(ctx(t), cfg, Request{Messages: []Message{{Role: User, Text: "你好"}}, Effort: High})
+		if err != nil {
+			t.Fatalf("%s %s: %v", c.kind, c.model, err)
+		}
+		sent, _ := json.Marshal(s.body)
+		for _, want := range c.wants {
+			if !strings.Contains(string(sent), want) {
+				t.Errorf("%s %s: the request lacks %s: %s", c.kind, c.model, want, sent)
+			}
+		}
+		for _, not := range c.lacks {
+			if strings.Contains(string(sent), not) {
+				t.Errorf("%s %s: the request has %s: %s", c.kind, c.model, not, sent)
+			}
+		}
+		if want := map[Kind]string{Chat: "hm", Responses: "h\n\nm"}[c.kind]; c.kind != Anthropic && got.Thinking != want {
+			t.Errorf("%s: the thinking read is %q", c.kind, got.Thinking)
+		}
+		if c.model == "claude-opus-5-5" && got.Thinking != "hm" {
+			t.Errorf("%s: the thinking read is %q", c.kind, got.Thinking)
+		}
+		// Saved and read again, the message has what was thought.
+		saved, _ := json.Marshal(got)
+		var back Message
+		if err := json.Unmarshal(saved, &back); err != nil || back.Thinking != got.Thinking {
+			t.Errorf("%s: read back %q, %v", c.kind, back.Thinking, err)
+		}
+		// Without an effort, or with one that is none, nothing asks for
+		// thinking.
+		for _, effort := range []string{"", "max"} {
+			if _, err := Complete(ctx(t), cfg, Request{Messages: []Message{{Role: User, Text: "你好"}}, Effort: effort}); err != nil {
+				t.Fatal(err)
+			}
+			sent, _ = json.Marshal(s.body)
+			for _, not := range []string{"reasoning_effort", `"reasoning":`, `"thinking":`, "output_config"} {
+				if strings.Contains(string(sent), not) {
+					t.Errorf("%s with effort %q: the request has %s: %s", c.kind, effort, not, sent)
+				}
+			}
 		}
 	}
 }

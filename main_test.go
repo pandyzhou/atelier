@@ -1081,7 +1081,7 @@ func TestScreenshot(t *testing.T) {
 			if asked%2 == 1 {
 				return llm.Message{Role: llm.Assistant, Calls: []llm.Call{{ID: "c", Name: "add_task", Input: json.RawMessage(`{"title":"交实验报告","due":"` + day(1) + `"}`)}}}, nil
 			}
-			return llm.Message{Role: llm.Assistant, Text: "今天有两节课：\n\n- **高等数学**，第 1–2 节，A301\n- **大学英语**，第 5–6 节，B102\n\n到期的任务有三项：写周报、修登录页的 bug、跑步 30 分钟。另外已经帮你加上明天要交的 `实验报告`。"}, nil
+			return llm.Message{Role: llm.Assistant, Text: "今天有两节课：\n\n- **高等数学**，第 1–2 节，A301\n- **大学英语**，第 5–6 节，B102\n\n到期的任务有三项：写周报、修登录页的 bug、跑步 30 分钟。另外已经帮你加上明天要交的 `实验报告`。", Thinking: "用户问今天的安排。今天是周一，课表里周一有高等数学和大学英语两门课。\n\n任务里今天到期的有三项。实验报告已经加上了，回答里顺便确认一下。"}, nil
 		}
 	}
 	for _, f := range a.features {
@@ -1841,5 +1841,97 @@ func TestAttachments(t *testing.T) {
 	click(t, tb, "历史对话", "删除对话：看看这些")
 	if len(saved()) != 0 {
 		t.Errorf("the pictures of a deleted conversation are kept: %q", saved())
+	}
+}
+
+// TestThinking walks through how hard a model thinks and what it thought:
+// the effort is chosen by the model's name, kept for that model, and sent;
+// the thinking shows as it comes, then shut over the answer, to open.
+func TestThinking(t *testing.T) {
+	dir := t.TempDir()
+	a := newApp(store.Open(dir))
+	a.win = &fakeWindow{}
+	key, err := a.box.Seal("k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.settings.Models = []modelConfig{{ID: 1, Name: "P", Kind: string(llm.Chat), Key: key, Models: []string{"m", "m2"}}}
+	a.settings.Model, a.settings.ModelName = 1, "m"
+	tt := ui.NewTester(a.view, 1280, 800)
+	var asked []llm.Request
+	var coming string
+	a.complete = func(_ context.Context, _ llm.Config, r llm.Request, onText func(string)) (llm.Message, error) {
+		asked = append(asked, r)
+		if len(asked) == 1 {
+			// It thinks, then calls a tool, with nothing to say yet.
+			r.OnThinking("得先加任务")
+			return llm.Message{Role: llm.Assistant, Thinking: "得先加任务", Calls: []llm.Call{{ID: "c1", Name: "add_task", Input: json.RawMessage(`{"title":"交报告"}`)}}}, nil
+		}
+		r.OnThinking("先看")
+		r.OnThinking("课表")
+		tt.Frame()
+		coming = strings.Join(tt.Texts(), "|")
+		onText("加好了。")
+		return llm.Message{Role: llm.Assistant, Text: "加好了。", Thinking: "先看课表"}, nil
+	}
+
+	if !tt.HasText("思考：默认") {
+		t.Fatalf("the effort does not show: %q", tt.Texts())
+	}
+	click(t, tt, "思考强度", "思考强度：高")
+	tt.Frame()
+	if a.settings.Efforts["1/m"] != llm.High || !tt.HasText("思考：高") || tt.HasText("思考强度：低") {
+		t.Fatalf("after choosing 高: %v, %q", a.settings.Efforts, tt.Texts())
+	}
+	click(t, tt, "给助手的话")
+	tt.Type("加个交报告的任务")
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if len(asked) != 2 || asked[0].Effort != llm.High || asked[1].Effort != llm.High {
+		t.Fatalf("asked %d times, with efforts %+v", len(asked), asked)
+	}
+	// As it came the thinking showed, open; now it is shut, over the
+	// answer and over the tool's call, each to open by itself.
+	if !strings.Contains(coming, "正在思考…") || !strings.Contains(coming, "先看课表") {
+		t.Errorf("while the thinking came: %q", coming)
+	}
+	if tt.HasText("先看课表") || tt.HasText("得先加任务") || tt.HasText("正在思考…") || shown(tt, "思考过程") != 2 || shown(tt, "复制回答") != 1 {
+		t.Fatalf("after the answer: %q", tt.Texts())
+	}
+	if !tt.HasText("想了 1 秒") {
+		t.Errorf("how long it thought does not show: %q", tt.Texts())
+	}
+	answer, _ := tt.Find("加好了。")
+	tt.Click("思考过程") // the first: the one over the tool's call
+	tt.Frame()
+	if !tt.HasText("得先加任务") || tt.HasText("先看课表") {
+		t.Errorf("after opening the first thinking: %q", tt.Texts())
+	}
+	if moved, _ := tt.Find("加好了。"); moved.Y <= answer.Y {
+		t.Errorf("the opened thinking takes no room: the answer at %v, then %v", answer.Y, moved.Y)
+	}
+
+	// Another model has its own effort, none until one is chosen; the
+	// first keeps its own, also after a restart, as the thinking is kept.
+	click(t, tt, "选择模型", "用模型：m2")
+	tt.Frame()
+	if !tt.HasText("思考：默认") {
+		t.Errorf("another model's effort: %q", tt.Texts())
+	}
+	click(t, tt, "思考强度", "思考强度：低")
+	click(t, tt, "思考强度", "思考强度：默认")
+	if _, has := a.settings.Efforts["1/m2"]; has || a.settings.Efforts["1/m"] != llm.High {
+		t.Errorf("the efforts kept: %v", a.settings.Efforts)
+	}
+	b := newApp(store.Open(dir))
+	b.win = &fakeWindow{}
+	if b.settings.Efforts["1/m"] != llm.High {
+		t.Errorf("after a restart, the efforts: %v", b.settings.Efforts)
+	}
+	tb := ui.NewTester(b.view, 1280, 800)
+	click(t, tb, "历史对话", "打开对话：加个交报告的任务")
+	tb.Frame()
+	if shown(tb, "思考过程") != 2 || !tb.HasText("想了 1 秒") {
+		t.Errorf("after a restart, the conversation: %q", tb.Texts())
 	}
 }

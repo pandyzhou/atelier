@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
@@ -56,6 +57,9 @@ type Message struct {
 	// Images are the pictures a user's message comes with; one without
 	// Data is left out of what is sent.
 	Images []Image
+	// Thinking is what the model thought before an assistant's message,
+	// as far as its service tells: to show, not to send back.
+	Thinking string
 	// Calls are the tools an assistant's message asks for; each is to be
 	// answered by a Result message.
 	Calls []Call
@@ -73,6 +77,7 @@ type savedMessage struct {
 	Role   Role            `json:"role"`
 	Text   string          `json:"text,omitempty"`
 	Images []Image         `json:"images,omitempty"`
+	Think  string          `json:"thinking,omitempty"`
 	Calls  []Call          `json:"calls,omitempty"`
 	CallID string          `json:"callId,omitempty"`
 	Raw    json.RawMessage `json:"raw,omitempty"`
@@ -81,7 +86,7 @@ type savedMessage struct {
 
 // MarshalJSON writes a message to be saved and gone on with later.
 func (m Message) MarshalJSON() ([]byte, error) {
-	return json.Marshal(savedMessage{m.Role, m.Text, m.Images, m.Calls, m.CallID, m.raw, m.kind})
+	return json.Marshal(savedMessage{m.Role, m.Text, m.Images, m.Thinking, m.Calls, m.CallID, m.raw, m.kind})
 }
 
 // UnmarshalJSON reads a message MarshalJSON wrote.
@@ -90,7 +95,7 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &v); err != nil {
 		return err
 	}
-	*m = Message{Role: v.Role, Text: v.Text, Images: v.Images, Calls: v.Calls, CallID: v.CallID, raw: v.Raw, kind: v.Kind}
+	*m = Message{Role: v.Role, Text: v.Text, Images: v.Images, Thinking: v.Think, Calls: v.Calls, CallID: v.CallID, raw: v.Raw, kind: v.Kind}
 	return nil
 }
 
@@ -100,6 +105,57 @@ type Request struct {
 	System   string
 	Messages []Message
 	Tools    []Tool
+	// Effort is how hard the model is to think: Low, Medium or High, or ""
+	// to say nothing of it, which leaves the model as its service has it.
+	// A model or a service that does not know of it may refuse the request.
+	Effort string
+	// OnThinking is given what the model thinks as it comes, by Stream,
+	// off the caller's thread: nil to leave it.
+	OnThinking func(string)
+}
+
+// How hard a model is asked to think.
+const (
+	Low    = "low"
+	Medium = "medium"
+	High   = "high"
+)
+
+// maxThought is the most tokens asked of Anthropic's models that think as
+// much as they find fit: their thinking is of the answer's tokens.
+const maxThought = 16000
+
+// budgets are the tokens older models of Anthropic's, and services that
+// take its requests, are given to think with, by effort.
+var budgets = map[string]int{Low: 2048, Medium: 8192, High: 16384}
+
+// budgeted tells the models of Anthropic's that think by a budget of
+// tokens: those before the ones that think as much as they find fit.
+var budgeted = regexp.MustCompile(`claude-(3|(opus|sonnet|haiku)-4-([015]|2\d{7})($|-))`)
+
+// think adds to a request's body what asks the model to think with the
+// effort, in the way of the service's kind.
+func think(c Config, effort string, body map[string]any) {
+	switch effort {
+	case Low, Medium, High:
+	default:
+		return
+	}
+	switch c.Kind {
+	case Chat:
+		body["reasoning_effort"] = effort
+	case Responses:
+		body["reasoning"] = map[string]any{"effort": effort, "summary": "auto"}
+	case Anthropic:
+		if model := strings.ToLower(c.Model); strings.Contains(model, "claude") && !budgeted.MatchString(model) {
+			body["thinking"] = map[string]any{"type": "adaptive", "display": "summarized"}
+			body["output_config"] = map[string]any{"effort": effort}
+			body["max_tokens"] = maxThought
+			return
+		}
+		body["thinking"] = map[string]any{"type": "enabled", "budget_tokens": budgets[effort]}
+		body["max_tokens"] = budgets[effort] + maxAnswer
+	}
 }
 
 // maxAnswer is the most tokens asked of a service that wants a limit said.
@@ -129,15 +185,20 @@ func prepare(c Config, r Request) (Config, map[string]any, func([]byte) (Message
 		return c, nil, nil, &Error{Message: "还没有填模型名"}
 	}
 	c.Key, c.Model = strings.TrimSpace(c.Key), strings.TrimSpace(c.Model)
+	var body map[string]any
+	var read func([]byte) (Message, bool)
 	switch c.Kind {
 	case Anthropic:
-		return c, anthropicRequest(c, r), anthropicAnswer, nil
+		body, read = anthropicRequest(c, r), anthropicAnswer
 	case Chat:
-		return c, chatRequest(c, r), chatAnswer, nil
+		body, read = chatRequest(c, r), chatAnswer
 	case Responses:
-		return c, responsesRequest(c, r), responsesAnswer, nil
+		body, read = responsesRequest(c, r), responsesAnswer
+	default:
+		return c, nil, nil, &Error{Message: "不认识的接口类型：" + string(c.Kind)}
 	}
-	return c, nil, nil, &Error{Message: "不认识的接口类型：" + string(c.Kind)}
+	think(c, r.Effort, body)
+	return c, body, read, nil
 }
 
 // finish reads the model's message from the body of an answer.
@@ -265,11 +326,12 @@ func anthropicAnswer(text []byte) (Message, bool) {
 		Content json.RawMessage `json:"content"`
 	}
 	var blocks []struct {
-		Type  string          `json:"type"`
-		Text  string          `json:"text"`
-		ID    string          `json:"id"`
-		Name  string          `json:"name"`
-		Input json.RawMessage `json:"input"`
+		Type     string          `json:"type"`
+		Text     string          `json:"text"`
+		Thinking string          `json:"thinking"`
+		ID       string          `json:"id"`
+		Name     string          `json:"name"`
+		Input    json.RawMessage `json:"input"`
 	}
 	if json.Unmarshal(text, &v) != nil || json.Unmarshal(v.Content, &blocks) != nil {
 		return Message{}, false
@@ -279,6 +341,8 @@ func anthropicAnswer(text []byte) (Message, bool) {
 		switch b.Type {
 		case "text":
 			m.Text += b.Text
+		case "thinking":
+			m.Thinking += b.Thinking
 		case "tool_use":
 			m.Calls = append(m.Calls, Call{ID: b.ID, Name: b.Name, Input: object(b.Input)})
 		}
@@ -346,7 +410,11 @@ func chatAnswer(text []byte) (Message, bool) {
 		return Message{}, false
 	}
 	var msg struct {
-		Content   *string `json:"content"`
+		Content *string `json:"content"`
+		// The model's thinking, under the name most services give it or
+		// the one some do.
+		Reasoning *string `json:"reasoning_content"`
+		Reasoned  *string `json:"reasoning"`
 		ToolCalls []struct {
 			ID       string `json:"id"`
 			Function struct {
@@ -361,6 +429,12 @@ func chatAnswer(text []byte) (Message, bool) {
 	m := Message{raw: v.Choices[0].Message}
 	if msg.Content != nil {
 		m.Text = *msg.Content
+	}
+	switch {
+	case msg.Reasoning != nil:
+		m.Thinking = *msg.Reasoning
+	case msg.Reasoned != nil:
+		m.Thinking = *msg.Reasoned
 	}
 	for _, call := range msg.ToolCalls {
 		m.Calls = append(m.Calls, Call{ID: call.ID, Name: call.Function.Name, Input: object(json.RawMessage(call.Function.Arguments))})
@@ -421,6 +495,9 @@ func responsesAnswer(text []byte) (Message, bool) {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
+		Summary []struct {
+			Text string `json:"text"`
+		} `json:"summary"`
 		CallID    string `json:"call_id"`
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
@@ -436,6 +513,16 @@ func responsesAnswer(text []byte) (Message, bool) {
 				if part.Type == "output_text" {
 					m.Text += part.Text
 				}
+			}
+		case "reasoning":
+			for _, part := range item.Summary {
+				if part.Text == "" {
+					continue
+				}
+				if m.Thinking != "" {
+					m.Thinking += "\n\n"
+				}
+				m.Thinking += part.Text
 			}
 		case "function_call":
 			m.Calls = append(m.Calls, Call{ID: item.CallID, Name: item.Name, Input: object(json.RawMessage(item.Arguments))})

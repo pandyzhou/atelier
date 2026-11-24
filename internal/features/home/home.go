@@ -48,6 +48,11 @@ type Options struct {
 	OnUI func(fn func())
 	// OpenSettings shows the models' settings.
 	OpenSettings func()
+	// Effort returns how hard the model asked is to think, one of llm's
+	// efforts or "" to leave it to the model, and SetEffort sets it: for
+	// that model, from now on.
+	Effort    func() string
+	SetEffort func(string)
 	// PickFiles has the user choose files to attach, off the UI's thread,
 	// and returns their paths: none when they chose none.
 	PickFiles func() []string
@@ -78,8 +83,11 @@ const (
 type entry struct {
 	Kind int    `json:"kind"`
 	Text string `json:"text"`
-	// Model is the model an answer is of.
-	Model string `json:"model,omitempty"`
+	// Model is the model an answer is of, Thinking what it thought before
+	// it, as far as its service told, and Thought for how many seconds.
+	Model    string `json:"model,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
+	Thought  int    `json:"thought,omitempty"`
 	// Files are what the user's message came with.
 	Files []attached `json:"files,omitempty"`
 }
@@ -331,34 +339,43 @@ func (h *Home) step(n int) {
 		return
 	}
 	req := llm.Request{System: h.system(), Messages: h.pictures(h.ui.history), Tools: tools}
+	if h.Effort != nil {
+		req.Effort = h.Effort()
+	}
 	run := h.ui.run
-	h.ui.growing = -1
+	h.ui.growing, h.ui.thinking = -1, time.Time{}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	h.ui.cancel = cancel
-	// The text that came and does not show yet: it comes off the UI's
-	// thread, piece by piece, and is shown on it, all there is at once.
+	// The text and the thinking that came and do not show yet: they come
+	// off the UI's thread, piece by piece, and are shown on it, all there
+	// is at once.
 	var mu sync.Mutex
-	var came string
+	var came, thought string
 	waiting := false
-	onText := func(piece string) {
-		mu.Lock()
-		came += piece
-		if waiting {
-			mu.Unlock()
-			return
-		}
-		waiting = true
-		mu.Unlock()
-		h.OnUI(func() {
+	take := func(into *string) func(string) {
+		return func(piece string) {
 			mu.Lock()
-			text := came
-			came, waiting = "", false
-			mu.Unlock()
-			if run == h.ui.run {
-				h.grow(text, cfg.Model)
+			*into += piece
+			if waiting {
+				mu.Unlock()
+				return
 			}
-		})
+			waiting = true
+			mu.Unlock()
+			h.OnUI(func() {
+				mu.Lock()
+				text, thinking := came, thought
+				came, thought, waiting = "", "", false
+				mu.Unlock()
+				if run == h.ui.run {
+					h.think(thinking, cfg.Model)
+					h.grow(text, cfg.Model)
+				}
+			})
+		}
 	}
+	onText := take(&came)
+	req.OnThinking = take(&thought)
 	h.Background(func() func() {
 		msg, err := h.Complete(ctx, cfg, req, onText)
 		cancel()
@@ -372,12 +389,23 @@ func (h *Home) step(n int) {
 			}
 			h.ui.history = append(h.ui.history, msg)
 			h.ui.follow = true
-			// The whole answer, in place of what of it showed as it came.
-			if text := strings.TrimSpace(msg.Text); text == "" {
-			} else if g := h.ui.growing; g >= 0 && g < len(h.ui.entries) {
-				h.ui.entries[g].Text = text
-			} else {
-				h.ui.entries = append(h.ui.entries, entry{Kind: answer, Text: text, Model: cfg.Model})
+			// The whole answer, and what was thought before it, in place
+			// of what of them showed as they came.
+			text, thinking := strings.TrimSpace(msg.Text), strings.TrimSpace(msg.Thinking)
+			g := h.ui.growing
+			if (g < 0 || g >= len(h.ui.entries)) && (text != "" || thinking != "") {
+				h.ui.entries = append(h.ui.entries, entry{Kind: answer, Model: cfg.Model})
+				g = len(h.ui.entries) - 1
+			}
+			if g >= 0 && g < len(h.ui.entries) {
+				e := &h.ui.entries[g]
+				if text != "" {
+					e.Text = text
+				}
+				if thinking != "" {
+					e.Thinking = thinking
+				}
+				h.thoughtFor(e)
 			}
 			h.ui.growing = -1
 			if len(msg.Calls) == 0 {
@@ -403,12 +431,41 @@ func (h *Home) grow(text, model string) {
 		return
 	}
 	if g := h.ui.growing; g >= 0 && g < len(h.ui.entries) {
+		// The thinking is over when the answer begins.
+		h.thoughtFor(&h.ui.entries[g])
 		h.ui.entries[g].Text += text
 	} else {
 		h.ui.entries = append(h.ui.entries, entry{Kind: answer, Text: text, Model: model})
 		h.ui.growing = len(h.ui.entries) - 1
 	}
 	h.ui.follow = true
+}
+
+// think shows more of what the model thinks before the answer that is
+// coming: over that answer, which begins with it.
+func (h *Home) think(text, model string) {
+	if text == "" {
+		return
+	}
+	if h.ui.thinking.IsZero() {
+		h.ui.thinking = h.now()
+	}
+	if g := h.ui.growing; g >= 0 && g < len(h.ui.entries) {
+		h.ui.entries[g].Thinking += text
+	} else {
+		h.ui.entries = append(h.ui.entries, entry{Kind: answer, Thinking: text, Model: model})
+		h.ui.growing = len(h.ui.entries) - 1
+	}
+	h.ui.follow = true
+}
+
+// thoughtFor notes, once, how long the thinking of an answer took: from
+// when it began to come until now.
+func (h *Home) thoughtFor(e *entry) {
+	if e.Thinking == "" || e.Thought != 0 || h.ui.thinking.IsZero() {
+		return
+	}
+	e.Thought = max(1, int(h.now().Sub(h.ui.thinking).Round(time.Second)/time.Second))
 }
 
 // tools are what the model can have done.

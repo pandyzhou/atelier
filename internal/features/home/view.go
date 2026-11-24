@@ -30,10 +30,16 @@ type viewState struct {
 	panel   bool               // the saved conversations show at the side
 	picking bool               // the models to choose from show
 	query   string             // what is typed to find one of them
-	pending []pending          // the files to send with the next message
-	loading int                // how many more of them are being read
-	note    string             // what could not be attached, and why
-	over    bool               // files are dragged over the page
+	// thinking is when the thinking of the answer that is coming began,
+	// zero when it has none; opened are the answers whose thinking shows,
+	// and efforting whether the efforts to choose from do.
+	thinking  time.Time
+	opened    map[int]bool
+	efforting bool
+	pending   []pending // the files to send with the next message
+	loading   int       // how many more of them are being read
+	note      string    // what could not be attached, and why
+	over      bool      // files are dragged over the page
 	// thumbs are the conversation's pictures as they show, by what they
 	// are kept under: nil for one that is no longer there.
 	thumbs map[string]*ui.Bitmap
@@ -83,6 +89,7 @@ func (h *Home) View(c *ui.Context) {
 func (h *Home) bar(c *ui.Context) {
 	ui.Row(c).Shrink(0).Gap(12).AlignItems(ui.Center).Children(func() {
 		h.picker(c)
+		h.effort(c)
 		ui.Box(c).Grow(1)
 		if len(h.ui.entries) > 0 && mallow.IconButton(c, "新对话", mallow.GlyphCompose, mallow.IconButtonStyle{Size: 36}).Clicked() {
 			h.Reset()
@@ -438,6 +445,92 @@ func (h *Home) picker(c *ui.Context) {
 	})
 }
 
+// efforts are how hard a model can be asked to think, with what they are
+// called: none leaves it to the model.
+var efforts = []struct{ value, name string }{{"", "默认"}, {llm.Low, "低"}, {llm.Medium, "中"}, {llm.High, "高"}}
+
+// effort is how hard the model asked is to think, and, on a click, the
+// efforts to choose from: the one chosen is the model's from then on.
+func (h *Home) effort(c *ui.Context) {
+	if h.Effort == nil || h.SetEffort == nil {
+		return
+	}
+	if _, ok := h.Model(); !ok {
+		return
+	}
+	current := h.Effort()
+	name := efforts[0].name
+	for _, e := range efforts {
+		if e.value == current {
+			name = e.name
+		}
+	}
+	button := mallow.Plain(c, "思考强度").Padding(6, 10).Gap(4).Shrink(0)
+	button.Children(func() {
+		ui.Text(c, "思考："+name).FontSize(13).TextColor(mallow.Muted).SingleLine()
+		mallow.GlyphChevronDown(c, mallow.Muted)
+	})
+	mallow.Tooltip(c, button, "模型回答前想多久。模型不支持时会报错，改回“默认”即可")
+	if button.Clicked() {
+		h.ui.efforting = !h.ui.efforting
+	}
+	mallow.Popover(c, button, &h.ui.efforting, func() {
+		for _, e := range efforts {
+			item := mallow.Plain(c.Key("effort:"+e.value), "思考强度："+e.name).Padding(7, 8).Gap(8).MinWidth(120)
+			color := mallow.Text
+			if e.value == current {
+				color = mallow.Accent
+			}
+			item.Children(func() {
+				ui.Text(c, e.name).Grow(1).FontSize(13).TextColor(color).SingleLine()
+				if e.value == current {
+					mallow.GlyphCheck(c, mallow.Accent)
+				}
+			})
+			if item.Clicked() {
+				h.SetEffort(e.value)
+				h.ui.efforting = false
+			}
+		}
+	})
+}
+
+// thought is what the model thought before an answer, under a line that
+// opens and shuts it: open while it comes and the answer has not begun.
+func (h *Home) thought(c *ui.Context, i int, e entry, growing bool) {
+	coming := growing && e.Text == ""
+	label := "思考过程"
+	switch {
+	case coming:
+		label = "正在思考…"
+	case e.Thought > 0:
+		label = fmt.Sprintf("想了 %d 秒", e.Thought)
+	}
+	open := coming || h.ui.opened[i]
+	head := mallow.Plain(c, "思考过程").Padding(4, 8, 4, 2).Gap(4).Margin(0, 0, 0, -2)
+	head.Children(func() {
+		ui.Text(c, label).FontSize(12).TextColor(mallow.Muted).SingleLine()
+		if open {
+			mallow.GlyphChevronDown(c, mallow.Muted)
+		} else {
+			mallow.GlyphChevronRight(c, mallow.Muted)
+		}
+	})
+	if head.Clicked() && !coming {
+		if h.ui.opened == nil {
+			h.ui.opened = map[int]bool{}
+		}
+		h.ui.opened[i] = !h.ui.opened[i]
+	}
+	if !open {
+		return
+	}
+	ui.Row(c).Gap(10).AlignItems(ui.Stretch).Padding(2, 0, 6, 2).Children(func() {
+		ui.Box(c).Width(2).Shrink(0).Radius(1).Background(mallow.Line)
+		ui.Text(c, strings.TrimSpace(e.Thinking)).Grow(1).MinWidth(0).FontSize(13).TextColor(mallow.Muted).Selectable()
+	})
+}
+
 // conversation is what was said, the newest at the bottom, over the field.
 func (h *Home) conversation(c *ui.Context) {
 	_, ok := h.Model()
@@ -495,6 +588,13 @@ func (h *Home) entry(c *ui.Context, i int, e entry) ui.Element {
 	return ui.Column(c).Gap(2).Children(func() {
 		if e.Model != "" {
 			ui.Text(c, e.Model).FontSize(12).FontWeight(500).TextColor(mallow.Muted).SingleLine().Padding(0, 0, 4, 0)
+		}
+		if strings.TrimSpace(e.Thinking) != "" {
+			h.thought(c, i, e, growing)
+		}
+		// What was thought before a tool was called has no answer under it.
+		if strings.TrimSpace(e.Text) == "" {
+			return
 		}
 		mallow.Markdown(c, strings.TrimSpace(e.Text), growing)
 		if growing {
