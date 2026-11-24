@@ -373,12 +373,17 @@ func TestTextSettings(t *testing.T) {
 	if a.settings.Font != "" || mallow.Font != defaultFont {
 		t.Errorf("after choosing the default font: %q, drawn in %q", a.settings.Font, mallow.Font)
 	}
-	if fonts := a.fontChoices(); len(fonts) > 1 {
-		click(t, tt, fonts[1].label)
-		tt.Frame()
-		if a.settings.Font != fonts[1].family || mallow.Font != fonts[1].family {
-			t.Errorf("after choosing %s: %q, drawn in %q", fonts[1].label, a.settings.Font, mallow.Font)
+	// Not one to download: this test asks nothing of the network.
+	for _, f := range a.fontChoices()[1:] {
+		if f.web != nil {
+			continue
 		}
+		click(t, tt, f.label)
+		tt.Frame()
+		if a.settings.Font != f.family || mallow.Font != f.family {
+			t.Errorf("after choosing %s: %q, drawn in %q", f.label, a.settings.Font, mallow.Font)
+		}
+		break
 	}
 	b := newApp(store.Open(dir))
 	ui.NewTester(b.view, 1280, 800).Frame()
@@ -386,6 +391,70 @@ func TestTextSettings(t *testing.T) {
 		t.Errorf("after restarting: size %q, font %q", b.settings.Size, b.settings.Font)
 	}
 	mallow.Font = defaultFont
+}
+
+// Choosing another font moves nothing: every text of the pages is at the
+// height it was, and as high, in each font the system has, at each size.
+// Only what a font draws in its place differs.
+func TestFontsKeepLayout(t *testing.T) {
+	defer func() { mallow.Font = defaultFont }()
+	a := newApp(store.Open(""))
+	st := ui.NewTester(a.view, 1280, 800)
+	add(t, st, "Buy milk")
+	click(t, st, "打开Buy milk")
+
+	places := func(tt *ui.Tester) map[string]place {
+		tt.Frame()
+		tt.Frame()
+		out := map[string]place{}
+		for _, text := range tt.Texts() {
+			if r, ok := tt.Find(text); ok {
+				out[text] = place{r.Y, r.H}
+			}
+		}
+		return out
+	}
+	fonts := 0
+	for _, page := range []string{"待办", "设置"} {
+		click(t, st, page)
+		for _, s := range sizes {
+			fonts += steady(t, a, s.id, page, func() map[string]place { return places(st) })
+		}
+	}
+	if fonts == 0 {
+		t.Skip("the system has none of the fonts to choose from")
+	}
+}
+
+// place is where a text is down the page, and how high.
+type place struct{ y, h float32 }
+
+// steady reports the places that differ, of those places returns, between
+// the default font and each other the system has, at a size; and how many
+// fonts it looked at.
+func steady(t *testing.T, a *app, size, page string, places func() map[string]place) int {
+	t.Helper()
+	a.settings.Size = size
+	var base map[string]place
+	fonts := 0
+	for _, f := range a.fontChoices() {
+		if f.web != nil {
+			continue
+		}
+		a.settings.Font = f.family
+		got := places()
+		if base == nil {
+			base = got
+			continue
+		}
+		fonts++
+		for text, want := range base {
+			if got[text] != want {
+				t.Errorf("%s at size %s in %s: %q is at %+v, in the default font at %+v", page, size, f.label, text, got[text], want)
+			}
+		}
+	}
+	return fonts
 }
 
 // A font the system does not have is downloaded when chosen, kept, and
@@ -423,19 +492,19 @@ func TestWebFont(t *testing.T) {
 	click(t, tt, "设置")
 	// A download that fails says so and changes nothing.
 	fetchErr = errFontChanged
-	click(t, tt, "测试字体 ↓ 0 MB")
+	click(t, tt, "测试字体 ↓")
 	tt.Frame()
 	if a.settings.Font != "" || !tt.HasText("测试字体 没有下载成功：下载到的文件和预期的不一样") {
 		t.Fatalf("after a failed download: font %q, %q", a.settings.Font, tt.Texts())
 	}
 	fetchErr = nil
-	click(t, tt, "测试字体 ↓ 0 MB")
+	click(t, tt, "测试字体 ↓")
 	tt.Frame()
 	if a.settings.Font != font.family || mallow.Font != font.family || !slices.Equal(registered, []string{"Test Web Font:font"}) {
 		t.Fatalf("after downloading: font %q, drawn in %q, registered %q", a.settings.Font, mallow.Font, registered)
 	}
 	// Here, it no longer says it is to download, and is not fetched again.
-	if !tt.HasText("测试字体") || tt.HasText("测试字体 ↓ 0 MB") {
+	if !tt.HasText("测试字体") || tt.HasText("测试字体 ↓") {
 		t.Errorf("the font downloaded still says it is to download: %q", tt.Texts())
 	}
 	click(t, tt, "微软雅黑", "测试字体")

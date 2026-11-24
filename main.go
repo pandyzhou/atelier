@@ -395,23 +395,28 @@ func (a *app) textSettings(c *ui.Context, row func(name, note string, width floa
 		}
 	})
 	fonts := &a.webFonts
-	note := "带 ↓ 的还没有，第一次点会从 GitHub 下载，只下一次"
+	note := "带 ↓ 的还没有，第一次点会从 GitHub 下载（7–25 MB），只下一次"
 	switch {
 	case fonts.loading != "":
 		note = fmt.Sprintf("正在下载%s：%d%%", fonts.loading, int(fonts.progress*100))
 	case fonts.message != "":
 		note = fonts.message
 	}
-	row("字体", note, 440, func() {
-		ui.Row(c).Gap(8).Wrap().Justify(ui.End).Children(func() {
+	// The fonts are under their row, across the page, each as wide as the
+	// others: beside it they leave no room at the larger sizes, and as
+	// wide as their names they would fill the lines another way in each
+	// font, so that choosing one would move the rest.
+	row("字体", note, 0, func() {})
+	{
+		ui.Row(c).Padding(0, 4, 16, 4).Gap(8).Wrap().Children(func() {
 			for _, f := range a.fontChoices() {
-				// A font to download says so, and how large it is, until
-				// it is here.
+				// A font to download says so until it is here.
 				label := f.label
 				if f.web != nil && !fonts.has(f.web) {
-					label = fmt.Sprintf("%s ↓ %d MB", f.label, (f.web.size+(1<<19))>>20)
+					label += " ↓"
 				}
-				if !mallow.Chip(c.Key(f.label), label, a.settings.Font == f.family).Clicked() {
+				chip := mallow.Chip(c.Key(f.label), label, a.settings.Font == f.family)
+				if chip.Width(112); !chip.Clicked() {
 					continue
 				}
 				if f.web != nil {
@@ -422,7 +427,7 @@ func (a *app) textSettings(c *ui.Context, row func(name, note string, width floa
 				a.saveSettings()
 			}
 		})
-	})
+	}
 }
 
 // aboutSettings say what the app is.
