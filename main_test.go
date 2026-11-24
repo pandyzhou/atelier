@@ -201,6 +201,68 @@ func TestTodoNewFromContextMenu(t *testing.T) {
 
 }
 
+// The month view is a calendar: a task is under the day it is due, opens in
+// a dialog, and a right click on a day adds a task due that day.
+func TestTodoMonthView(t *testing.T) {
+	d, tt := newTodoTester(t)
+	add(t, tt, "Buy milk")
+	k := d.Tasks()[0]
+	click(t, tt, "按月")
+	day, _ := time.Parse("2006-01-02", d.Today())
+	if !tt.HasText(fmt.Sprintf("%d 年 %d 月", day.Year(), int(day.Month()))) || !tt.HasText("Buy milk") {
+		t.Fatalf("the month view: %q", tt.Texts())
+	}
+	// The task opens in a dialog, which edits it.
+	click(t, tt, "打开Buy milk")
+	if !tt.HasText("任务标题") {
+		t.Fatalf("no dialog after opening a task of the month: %q", tt.Texts())
+	}
+	click(t, tt, "每周", "关闭详情")
+	if k.Repeat != todo.RepeatWeekly || tt.HasText("任务标题") {
+		t.Fatalf("after editing in the dialog and closing it: %+v, %q", k, tt.Texts())
+	}
+	click(t, tt, "打开Buy milk")
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if tt.HasText("任务标题") {
+		t.Fatalf("the dialog stays after Escape")
+	}
+
+	// A right click on a day adds a task due that day.
+	other := day.AddDate(0, 0, 3)
+	if other.Month() != day.Month() {
+		other = day.AddDate(0, 0, -3)
+	}
+	weekdays := [7]string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}
+	rightClick(t, tt, fmt.Sprintf("%d月%d日 %s", int(other.Month()), other.Day(), weekdays[other.Weekday()]))
+	click(t, tt, "新任务")
+	tt.Type("Buy bread")
+	tt.Key(0, ui.KeyEnter)
+	if ks := d.Tasks(); len(ks) != 2 || ks[1].Due != other.Format("2006-01-02") {
+		t.Fatalf("after adding on a day of the month: %+v", ks)
+	}
+
+	// Another month has neither, and 本月 comes back.
+	click(t, tt, "下一月", "下一月")
+	if tt.HasText("Buy milk") || tt.HasText("Buy bread") {
+		t.Errorf("two months on, the tasks of this one show: %q", tt.Texts())
+	}
+	click(t, tt, "本月")
+	if !tt.HasText("Buy milk") || !tt.HasText("Buy bread") {
+		t.Errorf("back in this month: %q", tt.Texts())
+	}
+	// A task added in another month is due on its first day.
+	click(t, tt, "上一月")
+	first := time.Date(day.Year(), day.Month()-1, 1, 0, 0, 0, 0, time.UTC)
+	rightClick(t, tt, "上一月")
+	click(t, tt, "新任务")
+	tt.Type("Old")
+	tt.Key(0, ui.KeyEnter)
+	if ks := d.Tasks(); len(ks) != 3 || ks[2].Due != first.Format("2006-01-02") {
+		t.Fatalf("after adding in the month before: %+v", ks)
+	}
+}
+
 // The tasks done have no view of their own: they stay under 今天完成的 for
 // the day, and in the week view on the day they were due.
 func TestTodoNoDoneView(t *testing.T) {
@@ -635,7 +697,7 @@ func TestFontsKeepLayout(t *testing.T) {
 		return out
 	}
 	fonts := 0
-	for _, page := range []string{"待办", "设置"} {
+	for _, page := range []string{"待办", "按月", "设置"} {
 		click(t, st, page)
 		for _, s := range sizes {
 			fonts += steady(t, a, s.id, page, func() map[string]place { return places(st) })

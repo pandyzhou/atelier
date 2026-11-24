@@ -15,6 +15,7 @@ import (
 type viewState struct {
 	view   string // the view chosen
 	monday string // the Monday of the week the week view shows
+	month  string // the first day of the month the month view shows
 	// open is the ID of the task whose details show, 0 for none; title is
 	// what is written as its title, and titleWas its title as they opened.
 	open            int
@@ -37,6 +38,7 @@ func newViewState(now time.Time) viewState {
 	return viewState{
 		view:   viewToday,
 		monday: mondayOf(today),
+		month:  monthOf(today),
 	}
 }
 
@@ -67,6 +69,7 @@ func (t *Todo) View(c *ui.Context) {
 		}
 	})
 	t.adder(c)
+	t.editor(c)
 }
 
 // nav lists the views, each with how many tasks it has still to do.
@@ -79,12 +82,17 @@ func (t *Todo) nav(c *ui.Context) {
 		return it
 	}
 	ui.Scroll(c).Width(navWidth).Shrink(0).Padding(20, 12, 16, 12).Gap(12).Children(func() {
-		mallow.SourceList(c, "视图", &t.ui.view, []mallow.Item{
+		// Another view closes the task that was open: unfolded in a list,
+		// it would come up as a dialog in the month.
+		if mallow.SourceList(c, "视图", &t.ui.view, []mallow.Item{
 			item(viewToday, "今天", mallow.GlyphCalendar),
 			item(viewNext7, "最近 7 天", mallow.GlyphCalendar),
 			item(viewWeek, "按周", mallow.GlyphCalendar),
+			item(viewMonth, "按月", mallow.GlyphCalendar),
 			item(viewAll, "全部", mallow.GlyphList),
-		})
+		}) {
+			t.closeOpen()
+		}
 	})
 }
 
@@ -155,7 +163,11 @@ func (t *Todo) taskMenu(c *ui.Context, row ui.Element, k *Task) {
 // openIn counts the tasks still to do that a view lists.
 func (t *Todo) openIn(view string) int {
 	n := 0
-	for _, g := range t.groups(view, mondayOf(t.Today())) {
+	groups := t.groups(view, mondayOf(t.Today()))
+	if view == viewMonth {
+		groups = []group{{tasks: t.inMonth(t.Today())}}
+	}
+	for _, g := range groups {
 		for _, k := range g.tasks {
 			if !k.Done && k.Title != "" {
 				n++
@@ -168,6 +180,13 @@ func (t *Todo) openIn(view string) int {
 // main is the view chosen: its heading, then a card with the line that
 // adds a task and the tasks in their groups.
 func (t *Todo) main(c *ui.Context) {
+	if t.ui.view == viewMonth {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(16).Padding(24, 0, 0, 0).Children(func() {
+			ui.Column(c).PaddingX(28).Children(func() { t.heading(c, []group{{tasks: t.inMonth(t.ui.month)}}) })
+			t.monthView(c)
+		})
+		return
+	}
 	groups := t.withOpen(t.groups(t.ui.view, t.ui.monday))
 	ui.Column(c).Grow(1).MinWidth(0).Gap(20).Padding(24, 0, 0, 0).Children(func() {
 		ui.Column(c).PaddingX(28).Children(func() { t.heading(c, groups) })
@@ -216,6 +235,9 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 		_, w := d.ISOWeek()
 		title = fmt.Sprintf("第 %d 周", w)
 		note = shortDate(t.ui.monday, today) + " — " + shortDate(addDays(t.ui.monday, 6), today) + " · " + note
+	case viewMonth:
+		d, _ := time.Parse(dateLayout, t.ui.month)
+		title = fmt.Sprintf("%d 年 %d 月", d.Year(), int(d.Month()))
 	case viewAll:
 		title = "全部"
 	}
@@ -239,22 +261,43 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 				}
 			})
 		}
+		if t.ui.view == viewMonth {
+			ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
+				if mallow.IconButton(c, "上一月", mallow.GlyphChevronLeft, mallow.IconButtonStyle{Size: 36}).Clicked() {
+					t.ui.month = addMonths(t.ui.month, -1)
+				}
+				if mallow.Button(c, "本月").Clicked() {
+					t.ui.month = monthOf(today)
+				}
+				if mallow.IconButton(c, "下一月", mallow.GlyphChevronRight, mallow.IconButtonStyle{Size: 36}).Clicked() {
+					t.ui.month = addMonths(t.ui.month, 1)
+				}
+			})
+		}
 	})
 }
 
 // startAdding shows the dialog that adds a task, as the context menus ask
-// for it, its draft due today, but
-// in the week view in the week shown (today, if that is this week, else its
-// Monday).
+// for it, its draft due today; but in the week view, or the month view, in
+// the week or the month shown: today if that is this one, else its first
+// day.
 func (t *Todo) startAdding() {
-	t.closeOpen()
 	today := t.Today()
-	k := Task{Due: today}
-	if t.ui.view == viewWeek && mondayOf(today) != t.ui.monday {
-		k.Due = t.ui.monday
+	due := today
+	switch {
+	case t.ui.view == viewWeek && mondayOf(today) != t.ui.monday:
+		due = t.ui.monday
+	case t.ui.view == viewMonth && monthOf(today) != t.ui.month:
+		due = t.ui.month
 	}
-	t.ui.draft, t.ui.adding = k, true
-	t.resetCalendar(k.Due)
+	t.startAddingOn(due)
+}
+
+// startAddingOn shows the dialog that adds a task, its draft due on a day.
+func (t *Todo) startAddingOn(due string) {
+	t.closeOpen()
+	t.ui.draft, t.ui.adding = Task{Due: due}, true
+	t.resetCalendar(due)
 }
 
 // adder is the dialog that adds a task: its title, where the keyboard is,
@@ -420,7 +463,14 @@ func (t *Todo) row(c *ui.Context, k *Task, dated bool) {
 func (t *Todo) detail(c *ui.Context, k *Task) {
 	card := mallow.Card(c, mallow.Small).Margin(10, 4).Padding(12, 16, 16, 12).Gap(12)
 	card.OnShortcut(0, ui.KeyEscape, func() { t.closeOpen() })
-	card.Children(func() {
+	card.Children(func() { t.editing(c, k) })
+}
+
+// editing is what edits a task that is open: a line with its check, its
+// title and what deletes it or closes it, then the rest of what it has.
+// It goes in a column: the card of its details, or a dialog.
+func (t *Todo) editing(c *ui.Context, k *Task) {
+	{
 		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 			done := k.Done
 			if mallow.CheckMark(c, &done, "完成这项任务").Changed() {
@@ -451,7 +501,7 @@ func (t *Todo) detail(c *ui.Context, k *Task) {
 		ui.Column(c).Padding(0, 4, 0, 36).Gap(14).Children(func() {
 			t.fields(c, k, func() { t.Changed(k) })
 		})
-	})
+	}
 }
 
 // fields are what a task has besides its title, each to be changed: the
@@ -467,7 +517,9 @@ func (t *Todo) fields(c *ui.Context, k *Task, changed func()) {
 			ui.Column(c).Grow(1).MinWidth(0).MaxWidth(width).Children(control)
 		})
 	}
-	if mallow.TextArea(c, &k.Note).Placeholder("备注").Label("备注").MinHeight(48).Changed() {
+	// A line high, and higher as more is written: a text area is three
+	// lines high at least otherwise, its line far under what is written.
+	if mallow.TextArea(c, &k.Note).Placeholder("备注").Label("备注").Lines(1, 8).MinHeight(0).Changed() {
 		changed()
 	}
 	line("日期", 640, func() {
