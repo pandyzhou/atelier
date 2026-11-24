@@ -7,6 +7,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -385,6 +386,71 @@ func TestTextSettings(t *testing.T) {
 		t.Errorf("after restarting: size %q, font %q", b.settings.Size, b.settings.Font)
 	}
 	mallow.Font = defaultFont
+}
+
+// A font the system does not have is downloaded when chosen, kept, and
+// used again after a restart without another download.
+func TestWebFont(t *testing.T) {
+	dir := t.TempDir()
+	font := &webFont{family: "Test Web Font", file: "test.ttf", size: 4}
+	webFonts["测试字体"] = font
+	knownFonts = append(knownFonts, struct {
+		label string
+		names []string
+	}{"测试字体", []string{"Test Web Font"}})
+	defer func() {
+		delete(webFonts, "测试字体")
+		knownFonts = knownFonts[:len(knownFonts)-1]
+		mallow.Font = defaultFont
+	}()
+
+	fetched, fetchErr := 0, error(nil)
+	var registered []string
+	fake := func(a *app) {
+		a.webFonts.fetch = func(_ context.Context, _ *webFont, progress func(float64)) ([]byte, error) {
+			fetched++
+			progress(0.5)
+			return []byte("font"), fetchErr
+		}
+		a.webFonts.register = func(data []byte, family string) error {
+			registered = append(registered, family+":"+string(data))
+			return nil
+		}
+	}
+	a := newApp(store.Open(dir))
+	fake(a)
+	tt := ui.NewTester(a.view, 1280, 800)
+	click(t, tt, "设置")
+	// A download that fails says so and changes nothing.
+	fetchErr = errFontChanged
+	click(t, tt, "测试字体 ↓ 0 MB")
+	tt.Frame()
+	if a.settings.Font != "" || !tt.HasText("测试字体 没有下载成功：下载到的文件和预期的不一样") {
+		t.Fatalf("after a failed download: font %q, %q", a.settings.Font, tt.Texts())
+	}
+	fetchErr = nil
+	click(t, tt, "测试字体 ↓ 0 MB")
+	tt.Frame()
+	if a.settings.Font != font.family || mallow.Font != font.family || !slices.Equal(registered, []string{"Test Web Font:font"}) {
+		t.Fatalf("after downloading: font %q, drawn in %q, registered %q", a.settings.Font, mallow.Font, registered)
+	}
+	// Here, it no longer says it is to download, and is not fetched again.
+	if !tt.HasText("测试字体") || tt.HasText("测试字体 ↓ 0 MB") {
+		t.Errorf("the font downloaded still says it is to download: %q", tt.Texts())
+	}
+	click(t, tt, "微软雅黑", "测试字体")
+	if fetched != 2 || a.settings.Font != font.family || len(registered) != 1 {
+		t.Errorf("choosing it again: fetched %d times, font %q, registered %q", fetched, a.settings.Font, registered)
+	}
+
+	// After a restart it is read from where it was kept.
+	registered = nil
+	b := newApp(store.Open(dir))
+	fake(b)
+	b.restoreFont()
+	if !slices.Equal(registered, []string{"Test Web Font:font"}) || fetched != 2 {
+		t.Errorf("after restarting: registered %q, fetched %d times", registered, fetched)
+	}
 }
 
 // A known font is found under the name its foundry gives the version

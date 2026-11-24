@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 
@@ -54,6 +55,7 @@ type app struct {
 	before   string       // the feature the settings were opened from
 	section  string       // the part of the settings shown
 	fonts    []fontChoice // the fonts to choose from, once the settings asked
+	webFonts fontsState   // the fonts downloaded, and the one on its way
 	box      *secret.Box  // seals the models' keys
 	models   modelsState  // what the models' part of the settings shows
 	updater  updater      // where new versions come from
@@ -71,6 +73,7 @@ func newApp(s *store.Store) *app {
 	if err := s.Load("settings", &a.settings); err != nil {
 		log.Printf("settings: load: %v", err)
 	}
+	a.webFonts = newFontsState(s.Dir())
 	if len(a.features) > 0 {
 		a.selected = a.features[0].ID()
 	}
@@ -202,9 +205,12 @@ func zoomOf(size string) float32 {
 // fontChoice is a font the settings offer: its family, and what to call it.
 type fontChoice struct {
 	family, label string
+	// web is set for a font the system does not have, which is downloaded.
+	web *webFont
 }
 
-// knownFonts are the families worth offering, where they are installed:
+// knownFonts are the families worth offering, where they are installed, or
+// can be downloaded (see webFonts):
 // those with Chinese glyphs, as text in a fallback font is set unevenly and
 // takes no strikethrough. A line is installed if a family's name begins
 // with one of its names, without regard to case: foundries put versions
@@ -250,7 +256,8 @@ func installed(families, names []string) string {
 }
 
 // fontChoices lists the fonts to choose from: the default, then those of
-// knownFonts the system has. It asks the system once.
+// knownFonts the system has or the app can download. It asks the system
+// once.
 func (a *app) fontChoices() []fontChoice {
 	if a.fonts != nil {
 		return a.fonts
@@ -259,10 +266,12 @@ func (a *app) fontChoices() []fontChoice {
 	for _, f := range ui.FontFamilies() {
 		families = append(families, f.Name)
 	}
-	a.fonts = []fontChoice{{"", "微软雅黑"}}
+	a.fonts = []fontChoice{{family: "", label: "微软雅黑"}}
 	for _, k := range knownFonts {
 		if family := installed(families, k.names); family != "" {
-			a.fonts = append(a.fonts, fontChoice{family, k.label})
+			a.fonts = append(a.fonts, fontChoice{family: family, label: k.label})
+		} else if web := webFonts[k.label]; web != nil {
+			a.fonts = append(a.fonts, fontChoice{family: web.family, label: k.label, web: web})
 		}
 	}
 	return a.fonts
@@ -385,13 +394,32 @@ func (a *app) textSettings(c *ui.Context, row func(name, note string, width floa
 			a.saveSettings()
 		}
 	})
-	row("字体", "只列出这台电脑上装了的中文字体", 360, func() {
+	fonts := &a.webFonts
+	note := "带 ↓ 的还没有，第一次点会从 GitHub 下载，只下一次"
+	switch {
+	case fonts.loading != "":
+		note = fmt.Sprintf("正在下载%s：%d%%", fonts.loading, int(fonts.progress*100))
+	case fonts.message != "":
+		note = fonts.message
+	}
+	row("字体", note, 440, func() {
 		ui.Row(c).Gap(8).Wrap().Justify(ui.End).Children(func() {
 			for _, f := range a.fontChoices() {
-				if mallow.Chip(c, f.label, a.settings.Font == f.family).Clicked() {
-					a.settings.Font = f.family
-					a.saveSettings()
+				// A font to download says so, and how large it is, until
+				// it is here.
+				label := f.label
+				if f.web != nil && !fonts.has(f.web) {
+					label = fmt.Sprintf("%s ↓ %d MB", f.label, (f.web.size+(1<<19))>>20)
 				}
+				if !mallow.Chip(c.Key(f.label), label, a.settings.Font == f.family).Clicked() {
+					continue
+				}
+				if f.web != nil {
+					a.chooseWebFont(f.label, f.web)
+					continue
+				}
+				a.settings.Font = f.family
+				a.saveSettings()
 			}
 		})
 	})
@@ -427,6 +455,7 @@ func main() {
 		})
 		// Released builds look for a newer version as they start, and say
 		// so only if there is one.
+		a.restoreFont()
 		a.updater = mygoUpdater()
 		a.checkForUpdate(true)
 	})
