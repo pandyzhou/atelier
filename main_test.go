@@ -21,6 +21,7 @@ import (
 	"github.com/pandyzhou/atelier/internal/features/home"
 	"github.com/pandyzhou/atelier/internal/features/timetable"
 	"github.com/pandyzhou/atelier/internal/features/todo"
+	"github.com/pandyzhou/atelier/internal/features/trending"
 	"github.com/pandyzhou/atelier/internal/llm"
 	"github.com/pandyzhou/atelier/internal/store"
 	"github.com/pandyzhou/mallow"
@@ -527,7 +528,7 @@ func TestTimetable(t *testing.T) {
 	for _, f := range a.features {
 		titles = append(titles, f.Title())
 	}
-	if !slices.Equal(titles, []string{"首页", "待办", "课表", "月历"}) {
+	if !slices.Equal(titles, []string{"首页", "待办", "课表", "月历", "热门"}) {
 		t.Fatalf("the features are %q", titles)
 	}
 	click(t, tt, "课表")
@@ -1167,6 +1168,15 @@ func TestScreenshot(t *testing.T) {
 			tb.SetTime(i+1, timetable.Period{Start: at})
 		}
 	}
+	// ATELIER_SCREENSHOT_TRENDING is a file of GitHub's page of trending
+	// repositories, for the page of them to show.
+	if path := os.Getenv("ATELIER_SCREENSHOT_TRENDING"); path != "" {
+		for _, f := range a.features {
+			if tr, ok := f.(*trending.Trending); ok {
+				tr.Fetch = func(context.Context) ([]byte, error) { return os.ReadFile(path) }
+			}
+		}
+	}
 	tt := ui.NewTester(a.view, 1280, 800)
 	// ATELIER_SCREENSHOT_SIZE is the window's size, as 860x520.
 	var w, h int
@@ -1351,7 +1361,7 @@ func TestFontsKeepLayout(t *testing.T) {
 			}
 		}
 	}
-	for _, page := range []string{"首页", "待办", "课表", "月历", "设置"} {
+	for _, page := range []string{"首页", "待办", "课表", "月历", "热门", "设置"} {
 		click(t, st, page)
 		for _, s := range sizes {
 			fonts += steady(t, a, s.id, page, func() map[string]place { return places(st) })
@@ -2122,5 +2132,78 @@ func TestReminders(t *testing.T) {
 	}
 	if b := newApp(store.Open(a.store.Dir())); !b.settings.RemindOff || b.settings.RemindLead != 5 {
 		t.Errorf("after a restart: %+v", b.settings)
+	}
+}
+
+// TestTrending walks through the page of GitHub's trending repositories:
+// it reads the list when it first shows, and not again while that is new;
+// a click opens a repository in the browser; a reading that fails says so
+// and leaves the list; and the list is there after a restart.
+func TestTrending(t *testing.T) {
+	const page = `<article class="Box-row"><h2 class="h3"><a href="/acme/rocket"><span>acme /</span> rocket</a></h2>
+<p class="col-9">Rockets for agents</p><span itemprop="programmingLanguage">Go</span>
+<a href="/acme/rocket/stargazers">14,814</a><a href="/acme/rocket/forks">1,430</a><span>2,395 stars this week</span></article>
+<article class="Box-row"><h2 class="h3"><a href="/solo/tiny"><span>solo /</span> tiny</a></h2>
+<a href="/solo/tiny/stargazers">987</a><a href="/solo/tiny/forks">12</a><span>61 stars this week</span></article>`
+	dir := t.TempDir()
+	a := newApp(store.Open(dir))
+	a.win = &fakeWindow{}
+	var tr *trending.Trending
+	for _, f := range a.features {
+		if f, ok := f.(*trending.Trending); ok {
+			tr = f
+		}
+	}
+	tt := ui.NewTester(a.view, 1280, 800)
+	// Until it is told where from, it reads nothing.
+	click(t, tt, "热门")
+	if tt.HasText("刷新热门") || tt.HasText("没有刷新成功") || !tt.HasText("还没有读过") {
+		t.Fatalf("before it can read: %q", tt.Texts())
+	}
+	click(t, tt, "待办")
+	fetches, fail := 0, false
+	tr.Fetch = func(context.Context) ([]byte, error) {
+		fetches++
+		if fail {
+			return nil, errors.New("连不上 GitHub，检查一下网络")
+		}
+		return []byte(page), nil
+	}
+	click(t, tt, "热门")
+	tt.Frame()
+	if fetches != 1 || len(tr.Repos()) != 2 {
+		t.Fatalf("after the page first shows: read %d times, %d repositories", fetches, len(tr.Repos()))
+	}
+	for _, want := range []string{"acme /", "rocket", "Rockets for agents", "Go", "★ 14,814", "本周 +2,395", "solo /", "本周 +61", "更新于 今天"} {
+		if !tt.HasText(want) {
+			t.Errorf("the list lacks %q: %q", want, tt.Texts())
+		}
+	}
+	click(t, tt, "待办", "热门")
+	tt.Frame()
+	if fetches != 1 {
+		t.Errorf("a list just read is read again: %d times", fetches)
+	}
+	click(t, tt, "打开 solo/tiny")
+	if got := tt.OpenedURLs(); len(got) != 1 || got[0] != "https://github.com/solo/tiny" {
+		t.Errorf("a click opens %q", got)
+	}
+	// The button reads it anew; when that fails the list stays.
+	fail = true
+	click(t, tt, "刷新热门")
+	tt.Frame()
+	if fetches != 2 || !tt.HasText("没有刷新成功：连不上 GitHub，检查一下网络") || !tt.HasText("rocket") {
+		t.Fatalf("after a reading that failed: read %d times, %q", fetches, tt.Texts())
+	}
+	tt.Frame()
+	if fetches != 2 {
+		t.Errorf("a failed reading is tried again at once: %d times", fetches)
+	}
+	b := newApp(store.Open(dir))
+	b.win = &fakeWindow{}
+	bt := ui.NewTester(b.view, 1280, 800)
+	click(t, bt, "热门")
+	if !bt.HasText("rocket") || !bt.HasText("本周 +2,395") {
+		t.Errorf("after a restart: %q", bt.Texts())
 	}
 }

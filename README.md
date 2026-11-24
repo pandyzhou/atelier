@@ -12,6 +12,7 @@
   - 以前“每周清单”的数据会在第一次启动时自动转成任务（原来的 `weekly.json` 保留不动）。
 - **课表**：一周的课程，每周相同，每门课一种颜色。平时只查看；点右上角的铅笔才能修改：点空格添加，按住拖过几节添加连上几节的课，点课程编辑，每天几节、每节的起止时间在“节次时间”里设。填了每节的开始时间后，上课前会弹出系统通知提醒（默认提前 20 分钟，可在设置的“通用”里关掉或改时间；应用要开着，关到托盘里也算）。
 - **月历**：同一批任务按月看。每天一格，任务显示在到期那天；点任务在对话框里编辑，右键某一天可以在那天新建任务。
+- **热门**：GitHub 这一周的热门仓库，读自 github.com/trending。打开页面时自动读取，超过 6 小时会重新读，也可以手动刷新；点一个仓库在浏览器里打开。
 
 ## 开发
 
@@ -48,6 +49,7 @@ main.go                      外壳：侧边栏 + 当前功能页面，在 featu
 internal/feature/            Feature 接口：ID、Title、View
 internal/store/              每个功能一个 JSON 文件的存储
 internal/features/home/      首页：AI 助手
+internal/features/trending/  热门：GitHub 每周热门仓库
 internal/features/todo/      待办
 internal/features/timetable/ 课表
 ```

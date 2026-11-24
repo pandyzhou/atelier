@@ -17,6 +17,7 @@ import (
 	"github.com/pandyzhou/atelier/internal/features/home"
 	"github.com/pandyzhou/atelier/internal/features/timetable"
 	"github.com/pandyzhou/atelier/internal/features/todo"
+	"github.com/pandyzhou/atelier/internal/features/trending"
 	"github.com/pandyzhou/atelier/internal/llm"
 	"github.com/pandyzhou/atelier/internal/secret"
 	"github.com/pandyzhou/atelier/internal/store"
@@ -61,6 +62,9 @@ func (a *app) makeFeatures(s *store.Store) []feature.Feature {
 		tasks,
 		table,
 		tasks.Calendar(),
+		// It reads its list only once main says from where: tests read
+		// nothing from the network.
+		trending.New(s, trending.Options{Background: a.background}),
 	}
 }
 
@@ -543,6 +547,11 @@ func main() {
 		a.updater = mygoUpdater()
 		a.checkForUpdate(true)
 		a.startReminders()
+		for _, f := range a.features {
+			if t, ok := f.(*trending.Trending); ok {
+				t.Fetch = trending.Get
+			}
+		}
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
