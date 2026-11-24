@@ -51,13 +51,20 @@ func (t *Todo) View(c *ui.Context) {
 	// The page is one card, as tall as the sidebar beside it, its parts set
 	// apart by grooves.
 	ui.Row(c).Fill().Padding(0, 28, 0, 16).AlignItems(ui.Stretch).Children(func() {
-		mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0).Children(func() {
+		page := mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0)
+		page.Children(func() {
 			ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 				t.nav(c)
 				mallow.GrooveV(c).Margin(24, 0)
 				t.main(c)
 			})
 		})
+		// A right click anywhere on the page but on a task, which has its
+		// own menu, offers to add one: the only way to, as no button
+		// does, so it is not kept to the list.
+		if mallow.ContextMenu(c, page, t.menuOpen("page"), []mallow.MenuEntry{newEntry}) == newEntry.ID {
+			t.startAdding()
+		}
 	})
 	t.adder(c)
 }
@@ -162,8 +169,7 @@ func (t *Todo) openIn(view string) int {
 // adds a task and the tasks in their groups.
 func (t *Todo) main(c *ui.Context) {
 	groups := t.withOpen(t.groups(t.ui.view, t.ui.monday))
-	view := ui.Column(c).Grow(1).MinWidth(0).Gap(20).Padding(24, 0, 0, 0)
-	view.Children(func() {
+	ui.Column(c).Grow(1).MinWidth(0).Gap(20).Padding(24, 0, 0, 0).Children(func() {
 		ui.Column(c).PaddingX(28).Children(func() { t.heading(c, groups) })
 		ui.Column(c).Grow(1).MinHeight(0).Padding(0, 0, 8, 0).Children(func() {
 			ui.Scroll(c).Label("任务列表").Grow(1).Padding(4, 20, 16, 20).Gap(2).Children(func() {
@@ -176,11 +182,6 @@ func (t *Todo) main(c *ui.Context) {
 			})
 		})
 	})
-	// A right click anywhere in the view but on a task, which has its own
-	// menu, offers to add one: the only way to, as no button does.
-	if mallow.ContextMenu(c, view, t.menuOpen("view"), []mallow.MenuEntry{newEntry}) == newEntry.ID {
-		t.startAdding()
-	}
 }
 
 func (t *Todo) emptyText() string {

@@ -168,7 +168,17 @@ func TestTodoNewFromContextMenu(t *testing.T) {
 	}
 	tt.Key(0, ui.KeyEscape)
 	tt.Frame()
-	// On a task: its menu alone, not the view's under it too.
+	// Beside the list too, on a view to choose and under them.
+	for _, at := range [][2]float32{{330, 126}, {330, 600}} {
+		tt.RightClickAt(at[0], at[1])
+		tt.Frame()
+		if n := shown(tt, "新任务"); n != 2 {
+			t.Fatalf("新任务 shows %d times after a right click at %v, not twice as one entry does: %q", n, at, tt.Texts())
+		}
+		tt.Key(0, ui.KeyEscape)
+		tt.Frame()
+	}
+	// On a task: its menu alone, not the page's under it too.
 	rightClick(t, tt, "打开Buy milk")
 	if n := shown(tt, "新任务"); n != 2 {
 		t.Fatalf("新任务 shows %d times after a right click on a task, not twice as one entry does: %q", n, tt.Texts())
