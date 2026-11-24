@@ -155,3 +155,44 @@ func TestPingErrors(t *testing.T) {
 		t.Errorf("a ping to a closed port: %v", err)
 	}
 }
+
+// A service's models are asked for at its own address, with the key as its
+// kind sends it, and come back in its order.
+func TestListModels(t *testing.T) {
+	const list = `{"object":"list","data":[{"id":"model-b"},{"id":"model-a"},{"id":""}]}`
+	for _, c := range []struct {
+		kind       Kind
+		path, auth string
+	}{
+		{Anthropic, "/v1/models", ""},
+		{Chat, "/models", "Bearer k"},
+		{Responses, "/models", "Bearer k"},
+	} {
+		s := newService(t, 200, list)
+		got, err := ListModels(context.Background(), Config{Kind: c.kind, BaseURL: s.URL, Key: " k "})
+		if err != nil || len(got) != 2 || got[0] != "model-b" || got[1] != "model-a" {
+			t.Errorf("%s: models %q, %v", c.kind, got, err)
+		}
+		if s.path != c.path || (c.auth != "" && s.auth != c.auth) || (c.kind == Anthropic && s.key != "k") {
+			t.Errorf("%s: asked at %q with Authorization %q, X-Api-Key %q", c.kind, s.path, s.auth, s.key)
+		}
+	}
+	for _, c := range []struct {
+		status int
+		answer string
+		want   string
+	}{
+		{401, `{"error":{"message":"bad key"}}`, "Key 不对"},
+		{200, `<html>login</html>`, "不是模型列表"},
+		{200, `{"data":[]}`, "没有列出模型"},
+	} {
+		s := newService(t, c.status, c.answer)
+		_, err := ListModels(context.Background(), Config{Kind: Chat, BaseURL: s.URL, Key: "k"})
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("status %d, %q: error %v, want one saying %q", c.status, c.answer, err, c.want)
+		}
+	}
+	if _, err := ListModels(context.Background(), Config{Kind: Chat}); err == nil {
+		t.Errorf("no error without a key")
+	}
+}

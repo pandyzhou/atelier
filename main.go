@@ -42,9 +42,11 @@ type settings struct {
 	Size string `json:"size,omitempty"`
 	// Models are the language models configured, Model the ID of the one
 	// the app's features use, and NextModel the last ID given.
-	Models    []modelConfig `json:"models,omitempty"`
-	Model     int           `json:"model,omitempty"`
-	NextModel int           `json:"nextModel,omitempty"`
+	Models []modelConfig `json:"models,omitempty"`
+	Model  int           `json:"model,omitempty"`
+	// ModelName is the default model, of the provider Model is the ID of.
+	ModelName string `json:"modelName,omitempty"`
+	NextModel int    `json:"nextModel,omitempty"`
 	// CloseQuits makes closing the window quit the app. Without it, the
 	// window hides and the app stays in the notification area.
 	CloseQuits bool `json:"closeQuits,omitempty"`
@@ -68,17 +70,21 @@ type app struct {
 	update   updateState  // what is known of a newer version
 	// ping tests a model's connection: llm.Ping, but in tests.
 	ping func(context.Context, llm.Config) error
-	win  mallow.Window // the window, for the title bar's buttons; nil in tests
+	// listModels asks a provider for its models: llm.ListModels, but in
+	// tests.
+	listModels func(context.Context, llm.Config) ([]string, error)
+	win        mallow.Window // the window, for the title bar's buttons; nil in tests
 }
 
 func newApp(s *store.Store) *app {
 	a := &app{store: s, features: features(s), settings: settings{Appearance: string(mallow.ModeSystem)}}
-	a.box, a.ping = secret.New(s.Dir()), llm.Ping
+	a.box, a.ping, a.listModels = secret.New(s.Dir()), llm.Ping, llm.ListModels
 	// No updates until main says where they come from: tests have none.
 	a.updater = updater{enabled: func() bool { return false }}
 	if err := s.Load("settings", &a.settings); err != nil {
 		log.Printf("settings: load: %v", err)
 	}
+	a.migrateModels()
 	a.webFonts = newFontsState(s.Dir())
 	if len(a.features) > 0 {
 		a.selected = a.features[0].ID()

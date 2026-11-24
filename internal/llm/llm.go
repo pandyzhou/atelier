@@ -38,18 +38,6 @@ func DefaultBaseURL(k Kind) string {
 	return "https://api.openai.com/v1"
 }
 
-// DefaultModel is the model to start from: Anthropic's has a name here, the
-// others are whatever the user's service calls its own.
-func DefaultModel(k Kind) string {
-	if k == Anthropic {
-		return "claude-opus-5-5"
-	}
-	return ""
-}
-
-// AnthropicModels are the current Claude models, to choose from.
-var AnthropicModels = []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-2"}
-
 // base returns the address requests go to, without the path of the call:
 // the user may have pasted the whole of it, as "…/v1/chat/completions".
 func (c Config) base() string {
@@ -79,6 +67,14 @@ func (c Config) Endpoint() string {
 		return c.base() + "/chat/completions"
 	}
 	return c.base() + "/responses"
+}
+
+// ModelsEndpoint is the address the service lists its models at.
+func (c Config) ModelsEndpoint() string {
+	if c.Kind == Anthropic {
+		return c.base() + "/v1/models"
+	}
+	return c.base() + "/models"
 }
 
 // Error is a failure the user can act on: what went wrong, in their words.

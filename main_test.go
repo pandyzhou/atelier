@@ -859,8 +859,10 @@ func TestInstalledFont(t *testing.T) {
 	}
 }
 
-// A model is added, filled in and tested in the settings; its key is saved
-// sealed, and opened again for the features that use the model.
+// A provider is added empty, whatever its interface: its address, its key
+// and its models are the user's to fill in. The key is saved sealed; a
+// model added is the default until another is; the service's own list
+// adds models too.
 func TestModelSettings(t *testing.T) {
 	dir := t.TempDir()
 	a := newApp(store.Open(dir))
@@ -870,25 +872,48 @@ func TestModelSettings(t *testing.T) {
 		pinged = append(pinged, c)
 		return answer
 	}
-	tt := ui.NewTester(a.view, 1280, 800)
-	click(t, tt, "设置", "模型", "添加模型")
-	if len(a.settings.Models) != 1 || a.settings.Model != a.settings.Models[0].ID {
-		t.Fatalf("after adding a model: %+v, default %d", a.settings.Models, a.settings.Model)
+	var listed []llm.Config
+	a.listModels = func(_ context.Context, c llm.Config) ([]string, error) {
+		listed = append(listed, c)
+		return []string{"some-model", "other-model"}, nil
 	}
-	if _, ok := a.DefaultModel(); !ok {
-		t.Errorf("the model added is not ready as the default")
+	tt := ui.NewTester(a.view, 1280, 900)
+	click(t, tt, "设置", "模型", "添加供应商")
+	if len(a.settings.Models) != 1 {
+		t.Fatalf("after adding a provider: %+v", a.settings.Models)
 	}
-	// Tested without a key, nothing is sent that could work: it says so.
-	click(t, tt, "Chat Completions", "接口地址")
+	// Nothing is filled in for the user, for any interface.
+	for _, kind := range []string{"Anthropic", "Responses", "Chat Completions"} {
+		click(t, tt, kind)
+		if m := a.settings.Models[0]; m.Name != "" || m.BaseURL != "" || len(m.Models) != 0 || m.Model != "" {
+			t.Fatalf("a new provider of %s has something set: %+v", kind, m)
+		}
+		if tt.HasText("claude") {
+			t.Fatalf("a new provider of %s names models: %q", kind, tt.Texts())
+		}
+	}
+	if _, ok := a.DefaultModel(); ok {
+		t.Errorf("there is a default model before any is added")
+	}
+	// Tested without a model, it says what is missing.
+	click(t, tt, "测试连接")
+	if len(pinged) != 0 || !tt.HasText("先在上面添加一个模型") {
+		t.Fatalf("a test without a model: sent %+v, %q", pinged, tt.Texts())
+	}
+
+	click(t, tt, "供应商名称")
+	tt.Type("Example")
+	click(t, tt, "接口地址")
 	tt.Type("https://api.example.com/v1")
-	click(t, tt, "模型名")
-	tt.Type("some-model")
 	click(t, tt, "API Key")
 	tt.Type("sk-secret-123")
+	click(t, tt, "添加模型名")
+	tt.Type("some-model")
+	tt.Key(0, ui.KeyEnter)
 	tt.Frame()
 	m := a.settings.Models[0]
-	if m.Kind != string(llm.Chat) || m.BaseURL != "https://api.example.com/v1" || m.Model != "some-model" {
-		t.Fatalf("the model filled in: %+v", m)
+	if m.Name != "Example" || m.Kind != string(llm.Chat) || m.BaseURL != "https://api.example.com/v1" || !slices.Equal(m.Models, []string{"some-model"}) {
+		t.Fatalf("the provider filled in: %+v", m)
 	}
 	if m.Key == "" || strings.Contains(m.Key, "sk-secret") {
 		t.Fatalf("the key is saved as %q", m.Key)
@@ -900,11 +925,15 @@ func TestModelSettings(t *testing.T) {
 	if data, err := os.ReadFile(filepath.Join(dir, "settings.json")); err != nil || strings.Contains(string(data), "sk-secret") {
 		t.Fatalf("settings.json: %v, holds the key: %v", err, strings.Contains(string(data), "sk-secret"))
 	}
+	// The first model added is the default.
+	want := llm.Config{Kind: llm.Chat, BaseURL: "https://api.example.com/v1", Key: "sk-secret-123", Model: "some-model"}
+	if c, ok := a.DefaultModel(); !ok || c != want {
+		t.Fatalf("the default model is %+v, %v", c, ok)
+	}
 
 	click(t, tt, "测试连接")
 	tt.Frame()
-	want := llm.Config{Kind: llm.Chat, BaseURL: "https://api.example.com/v1", Key: "sk-secret-123", Model: "some-model"}
-	if len(pinged) != 1 || pinged[0] != want || !tt.HasText("连接正常，模型有回应") {
+	if len(pinged) != 1 || pinged[0] != want || !tt.HasText("连接正常，some-model 有回应") {
 		t.Fatalf("the test sent %+v; texts %q", pinged, tt.Texts())
 	}
 	answer = &llm.Error{Message: "Key 不对，或者没有权限（401）"}
@@ -914,20 +943,64 @@ func TestModelSettings(t *testing.T) {
 		t.Errorf("a failed test does not say why: %q", tt.Texts())
 	}
 
-	// After a restart the model is there, and its key opens.
-	b := newApp(store.Open(dir))
-	if c, ok := b.DefaultModel(); !ok || c != want {
+	// The service's list offers the models not added yet.
+	click(t, tt, "获取模型列表")
+	tt.Frame()
+	if len(listed) != 1 || listed[0].Key != "sk-secret-123" || listed[0].BaseURL != want.BaseURL {
+		t.Fatalf("the list was asked with %+v", listed)
+	}
+	if shown(tt, "添加other-model") != 1 || shown(tt, "添加some-model") != 0 {
+		t.Fatalf("the list offers: %q", tt.Texts())
+	}
+	click(t, tt, "添加other-model")
+	if got := a.settings.Models[0].Models; !slices.Equal(got, []string{"some-model", "other-model"}) {
+		t.Fatalf("after adding from the list: %q", got)
+	}
+	// Another model is made the default; taking it away gives that back.
+	click(t, tt, "把other-model设为默认")
+	if c, _ := a.DefaultModel(); c.Model != "other-model" {
+		t.Fatalf("after 设为默认: %+v", c)
+	}
+	// After a restart the provider is there, and its key opens.
+	want.Model = "other-model"
+	if c, ok := newApp(store.Open(dir)).DefaultModel(); !ok || c != want {
 		t.Fatalf("after restarting, the default model is %+v, %v", c, ok)
 	}
-	// A second model can be made the default; deleting it gives that back.
-	click(t, tt, "添加模型", "设为默认")
-	second := a.settings.Models[1].ID
-	if a.settings.Model != second {
-		t.Fatalf("after 设为默认: default %d, want %d", a.settings.Model, second)
+	click(t, tt, "移除other-model")
+	if c, ok := a.DefaultModel(); !ok || c.Model != "some-model" {
+		t.Fatalf("after removing the default model: %+v, %v", c, ok)
 	}
-	click(t, tt, "删除模型")
-	if len(a.settings.Models) != 1 || a.settings.Model != a.settings.Models[0].ID {
-		t.Errorf("after deleting the default model: %+v, default %d", a.settings.Models, a.settings.Model)
+
+	// A second provider's model can be the default; deleting that provider
+	// gives it back to the first.
+	click(t, tt, "收起", "添加供应商", "添加模型名")
+	tt.Type("second-model")
+	tt.Key(0, ui.KeyEnter)
+	click(t, tt, "把second-model设为默认")
+	if a.settings.Model != a.settings.Models[1].ID || a.settings.ModelName != "second-model" {
+		t.Fatalf("after 设为默认 in a second provider: %d %q", a.settings.Model, a.settings.ModelName)
+	}
+	click(t, tt, "删除供应商")
+	if len(a.settings.Models) != 1 || a.settings.Model != a.settings.Models[0].ID || a.settings.ModelName != "some-model" {
+		t.Errorf("after deleting the default's provider: %+v, default %d %q", a.settings.Models, a.settings.Model, a.settings.ModelName)
+	}
+}
+
+// Settings saved when each entry was one model are read as providers: the
+// model becomes its provider's, and the default entry's the default.
+func TestModelSettingsOfOld(t *testing.T) {
+	dir := t.TempDir()
+	old := `{"models":[{"id":1,"name":"Claude","kind":"anthropic","model":"claude-opus-5-5"},{"id":2,"name":"DS","kind":"chat","baseURL":"https://api.example.com/v1","model":"deep"}],"model":2,"nextModel":2}`
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newApp(store.Open(dir))
+	ms := a.settings.Models
+	if len(ms) != 2 || !slices.Equal(ms[0].Models, []string{"claude-opus-5-5"}) || !slices.Equal(ms[1].Models, []string{"deep"}) || ms[0].Model != "" {
+		t.Fatalf("the providers read: %+v", ms)
+	}
+	if c, ok := a.DefaultModel(); !ok || c.Model != "deep" || c.Kind != llm.Chat {
+		t.Errorf("the default model read: %+v, %v", c, ok)
 	}
 }
 

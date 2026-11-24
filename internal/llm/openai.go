@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 )
 
 // pingOpenAI sends one short message to a service that speaks OpenAI's Chat
@@ -53,6 +54,59 @@ func post(ctx context.Context, endpoint string, header http.Header, body any) er
 		return &Error{Message: "这个地址回的不是接口的数据，地址可能不对", Status: resp.StatusCode}
 	}
 	return nil
+}
+
+// header is what a request of c carries besides its body: the key, as the
+// service of its kind reads it.
+func header(c Config) http.Header {
+	if c.Kind == Anthropic {
+		return anthropicHeader(c)
+	}
+	h := http.Header{}
+	h.Set("Authorization", "Bearer "+c.Key)
+	return h
+}
+
+// ListModels asks the service which models it has, and returns their
+// names in its order: all three kinds answer {"data": [{"id": …}]}. Not
+// every service lists its models; the error is an *Error.
+func ListModels(ctx context.Context, c Config) ([]string, error) {
+	if strings.TrimSpace(c.Key) == "" {
+		return nil, &Error{Message: "还没有填 Key"}
+	}
+	c.Key = strings.TrimSpace(c.Key)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.ModelsEndpoint(), nil)
+	if err != nil {
+		return nil, &Error{Message: "地址写得不对：" + err.Error()}
+	}
+	req.Header = header(c)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, netError(err)
+	}
+	defer resp.Body.Close()
+	text, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, statusError(resp.StatusCode, errorMessage(text))
+	}
+	var list struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(text, &list) != nil {
+		return nil, &Error{Message: "这个地址回的不是模型列表，地址可能不对", Status: resp.StatusCode}
+	}
+	var names []string
+	for _, m := range list.Data {
+		if m.ID != "" {
+			names = append(names, m.ID)
+		}
+	}
+	if len(names) == 0 {
+		return nil, &Error{Message: "这个服务没有列出模型，请手动填模型名", Status: resp.StatusCode}
+	}
+	return names, nil
 }
 
 // errorMessage finds what a service said went wrong in the body of its
