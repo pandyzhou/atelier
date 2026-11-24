@@ -322,7 +322,6 @@ func (a *app) settingsPage(c *ui.Context) {
 		mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0).Children(func() {
 			ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 				ui.Scroll(c).Width(208).Shrink(0).Padding(24, 12, 16, 12).Gap(12).Children(func() {
-					mallow.Label(c, "设置").PaddingX(12)
 					mallow.SourceList(c, "设置", &a.section, items)
 				})
 				mallow.GrooveV(c).Margin(24, 0)
