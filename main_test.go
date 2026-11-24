@@ -814,6 +814,39 @@ func TestHome(t *testing.T) {
 		t.Fatalf("after delete_task: %d tasks, %q", len(tasks.Tasks()), tt.Texts())
 	}
 
+	// A course is changed and deleted by its ID, which the model is told;
+	// one moved onto another stays where it was, and the model is told why.
+	math := table.Courses()[0]
+	if _, err := table.Put(timetable.Course{Name: "英语", Day: 0, From: 1, To: 2}); err != nil {
+		t.Fatal(err)
+	}
+	answers = append(answers,
+		llm.Message{Role: llm.Assistant, Calls: []llm.Call{
+			call("c8", "update_course", fmt.Sprintf(`{"id":%d,"weekday":1,"from_period":1}`, math.ID)),
+			call("c9", "update_course", fmt.Sprintf(`{"id":%d,"weekday":4,"from_period":5,"to_period":6,"room":"B202","name":"高数"}`, math.ID)),
+			call("c10", "delete_course", `{"id":9999}`),
+		}},
+		llm.Message{Role: llm.Assistant, Text: "改好了。"},
+		llm.Message{Role: llm.Assistant, Calls: []llm.Call{call("c11", "delete_course", fmt.Sprintf(`{"id":%d}`, math.ID))}},
+		llm.Message{Role: llm.Assistant, Text: "删掉了。"})
+	say("高数改到周四五六节，在 B202")
+	if !strings.Contains(asked[len(asked)-2].System, fmt.Sprintf("[%d] 周三 第 3–4 节 高等数学", math.ID)) {
+		t.Errorf("the model is not told the course's ID: %s", asked[len(asked)-2].System)
+	}
+	if k := table.Course(math.ID); k == nil || k.Name != "高数" || k.Day != 3 || k.From != 5 || k.To != 6 || k.Room != "B202" {
+		t.Fatalf("the course after update_course: %+v", k)
+	}
+	if got := asked[len(asked)-1].Messages; !strings.Contains(got[len(got)-3].Text, "已经有“英语”了") || !strings.Contains(got[len(got)-2].Text, "已修改") || !strings.Contains(got[len(got)-1].Text, "没有 id 是 9999 的课程") {
+		t.Errorf("the model is told of the courses' changes: %+v", got[len(got)-3:])
+	}
+	if !tt.HasText("已修改课程：高等数学 · 改名为“高数”，改到周四第 5–6 节，改了地点") {
+		t.Errorf("the course's change does not show: %q", tt.Texts())
+	}
+	say("把高数删了")
+	if table.Course(math.ID) != nil || len(table.Courses()) != 1 || !tt.HasText("已删除课程：高数 · 周四第 5–6 节") {
+		t.Fatalf("after delete_course: %d courses, %q", len(table.Courses()), tt.Texts())
+	}
+
 	// What goes wrong shows, and the field takes the next message.
 	click(t, tt, "给助手的话")
 	tt.Type("再试一次")

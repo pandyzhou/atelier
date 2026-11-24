@@ -455,6 +455,26 @@ var tools = []llm.Tool{
 		}),
 	},
 	{
+		Name:        "update_course",
+		Description: "修改课表里已有的一门课。只填要改的字段，没填的保持原样。id 是课程前面方括号里的数字。和别的课程冲突时会失败并说明原因。",
+		Parameters: schema([]string{"id"}, map[string]any{
+			"id":          prop("integer", "课程的 id"),
+			"name":        prop("string", "新的课程名"),
+			"weekday":     prop("integer", "改到星期几，1 是周一，7 是周日"),
+			"from_period": prop("integer", "改为从第几节开始；不填 to_period 时，课的节数不变"),
+			"to_period":   prop("integer", "改为到第几节结束"),
+			"room":        prop("string", "新的上课地点；填空字符串表示清空"),
+			"teacher":     prop("string", "新的任课老师；填空字符串表示清空"),
+		}),
+	},
+	{
+		Name:        "delete_course",
+		Description: "从课表里删除一门课，删了不能恢复。只在用户明确要求删除时使用；说不清是哪一门时先问。id 是课程前面方括号里的数字。",
+		Parameters: schema([]string{"id"}, map[string]any{
+			"id": prop("integer", "课程的 id"),
+		}),
+	},
+	{
 		Name:        "list_tasks",
 		Description: "按到期日期查询任务，包括已完成的。提示里已经列出未完成的任务，只有要查已完成的或核对时才需要用。",
 		Parameters: schema([]string{"from", "to"}, map[string]any{
@@ -602,6 +622,86 @@ func (h *Home) call(c llm.Call) string {
 		}
 		did(fmt.Sprintf("已添加课程：%s · %s第 %s 节", k.Name, dayNames[k.Day], span(k.From, k.To)))
 		return "已添加"
+	case "update_course":
+		var in struct {
+			ID                  int
+			Name, Room, Teacher *string
+			Weekday             *int
+			From                *int `json:"from_period"`
+			To                  *int `json:"to_period"`
+		}
+		if err := json.Unmarshal(c.Input, &in); err != nil {
+			return "参数不对：" + err.Error()
+		}
+		was := h.table.Course(in.ID)
+		if was == nil {
+			return fmt.Sprintf("没有 id 是 %d 的课程", in.ID)
+		}
+		k := *was
+		if in.Name != nil {
+			if k.Name = strings.TrimSpace(*in.Name); k.Name == "" {
+				return "没有修改：课程名不能是空的"
+			}
+		}
+		if in.Weekday != nil {
+			k.Day = *in.Weekday - 1
+		}
+		// Moved by where it begins alone, a course stays as long.
+		if in.From != nil {
+			k.From = *in.From
+			if in.To == nil {
+				k.To = k.From + was.To - was.From
+			}
+		}
+		if in.To != nil {
+			k.To = *in.To
+		}
+		if in.Room != nil {
+			k.Room = strings.TrimSpace(*in.Room)
+		}
+		if in.Teacher != nil {
+			k.Teacher = strings.TrimSpace(*in.Teacher)
+		}
+		n := len(h.table.Periods())
+		if k.Day < 0 || k.Day > 6 || k.From < 1 || k.To < k.From || k.To > n {
+			return fmt.Sprintf("没有修改：weekday 要在 1 到 7 之间，节次要在 1 到 %d 之间，且 to_period 不小于 from_period", n)
+		}
+		var changes []string
+		if k.Name != was.Name {
+			changes = append(changes, "改名为“"+k.Name+"”")
+		}
+		if k.Day != was.Day || k.From != was.From || k.To != was.To {
+			changes = append(changes, fmt.Sprintf("改到%s第 %s 节", dayNames[k.Day], span(k.From, k.To)))
+		}
+		if k.Room != was.Room {
+			changes = append(changes, "改了地点")
+		}
+		if k.Teacher != was.Teacher {
+			changes = append(changes, "改了老师")
+		}
+		if len(changes) == 0 {
+			return "没有要改的：课程已经是这样了"
+		}
+		name := was.Name
+		kept, err := h.table.Put(k)
+		if err != nil {
+			return "没有修改：" + err.Error()
+		}
+		did("已修改课程：" + name + " · " + strings.Join(changes, "，"))
+		return "已修改，现在是：" + h.courseLine(kept)
+	case "delete_course":
+		var in struct{ ID int }
+		if err := json.Unmarshal(c.Input, &in); err != nil {
+			return "参数不对：" + err.Error()
+		}
+		k := h.table.Course(in.ID)
+		if k == nil {
+			return fmt.Sprintf("没有 id 是 %d 的课程", in.ID)
+		}
+		name := fmt.Sprintf("%s · %s第 %s 节", k.Name, dayNames[k.Day], span(k.From, k.To))
+		h.table.Remove(k.ID)
+		did("已删除课程：" + name)
+		return "已删除"
 	case "list_tasks":
 		var in struct{ From, To string }
 		if err := json.Unmarshal(c.Input, &in); err != nil {
@@ -690,6 +790,25 @@ func (h *Home) taskLine(k *todo.Task) string {
 	return b.String()
 }
 
+// courseLine writes a course for the model, on a line: its ID first, by
+// which the model says which course it means.
+func (h *Home) courseLine(k *timetable.Course) string {
+	var b strings.Builder
+	periods := h.table.Periods()
+	fmt.Fprintf(&b, "[%d] %s 第 %s 节 %s", k.ID, dayNames[k.Day], span(k.From, k.To), k.Name)
+	if k.From >= 1 && k.To <= len(periods) && periods[k.From-1].Start != "" && periods[k.To-1].End != "" {
+		fmt.Fprintf(&b, " %s–%s", periods[k.From-1].Start, periods[k.To-1].End)
+	}
+	if k.Room != "" {
+		b.WriteString(" 地点：" + k.Room)
+	}
+	if k.Teacher != "" {
+		b.WriteString(" 老师：" + k.Teacher)
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
 // listed is how many of the tasks still to do the model is told outright.
 const listed = 200
 
@@ -707,10 +826,10 @@ func (h *Home) system() string {
 - 问某天的安排时，把那天的课和到期的任务都说出来。
 - 添加前信息不全（比如课程没说星期几、第几节）就先问清楚，不要猜。
 - 添加成功后用一句话确认。工具说失败时，把原因告诉用户。
-- 任务可以修改、标为完成和删除，用任务前面方括号里的 id 指明是哪一条；回答用户时不要提 id。
+- 任务可以修改、标为完成和删除，课程可以修改和删除，用前面方括号里的 id 指明是哪一条；回答用户时不要提 id。
 - 删除不能恢复：只在用户明确说要删时才删，指不清是哪一条、或者一次要删好几条时，先列出来问清楚。
 - 用户附上图片或文件时，按里面的内容回答。要据此添加好几条任务或课程时，先把读到的列出来让用户确认，再添加。
-- 课表里的课程只能查看和添加。用户要修改或删除课程时，请他到“课表”页面操作。
+- 每天有几节课、每节课的时间不能改。用户要改这些时，请他到“课表”页面操作。
 `)
 	periods := h.table.Periods()
 	fmt.Fprintf(&b, "\n课表（每周相同，每天 %d 节）：\n", len(periods))
@@ -718,17 +837,7 @@ func (h *Home) system() string {
 		b.WriteString("还没有课程。\n")
 	}
 	for _, k := range h.table.Courses() {
-		fmt.Fprintf(&b, "%s 第 %s 节 %s", dayNames[k.Day], span(k.From, k.To), k.Name)
-		if k.From >= 1 && k.To <= len(periods) && periods[k.From-1].Start != "" && periods[k.To-1].End != "" {
-			fmt.Fprintf(&b, " %s–%s", periods[k.From-1].Start, periods[k.To-1].End)
-		}
-		if k.Room != "" {
-			b.WriteString(" 地点：" + k.Room)
-		}
-		if k.Teacher != "" {
-			b.WriteString(" 老师：" + k.Teacher)
-		}
-		b.WriteString("\n")
+		b.WriteString(h.courseLine(k))
 	}
 	b.WriteString("\n未完成的任务：\n")
 	n := 0
