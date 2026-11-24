@@ -143,8 +143,7 @@ func TestTodoContextMenus(t *testing.T) {
 }
 
 // A right click offers to add a task too: where there is no task, and on a
-// task, above what is done with that one. Not among the tasks done, where
-// none is added.
+// task, above what is done with that one.
 func TestTodoNewFromContextMenu(t *testing.T) {
 	d, tt := newTodoTester(t)
 	// In the list, which is empty yet.
@@ -190,17 +189,20 @@ func TestTodoNewFromContextMenu(t *testing.T) {
 		t.Fatalf("after deleting from the menu that adds too: %+v", ks)
 	}
 
-	click(t, tt, "完成Buy milk", "已完成")
-	rightClick(t, tt, "打开Buy milk")
-	if !tt.HasText("标为未完成") || shown(tt, "新任务") != 0 {
-		t.Errorf("the menu of a task done: %q", tt.Texts())
+}
+
+// The tasks done have no view of their own: they stay under 今天完成的 for
+// the day, and in the week view on the day they were due.
+func TestTodoNoDoneView(t *testing.T) {
+	_, tt := newTodoTester(t)
+	add(t, tt, "Buy milk")
+	click(t, tt, "完成Buy milk")
+	if tt.HasText("已完成") || !tt.HasText("今天完成的") || !tt.HasText("Buy milk") {
+		t.Fatalf("after checking a task off: %q", tt.Texts())
 	}
-	tt.Key(0, ui.KeyEscape)
-	tt.Frame()
-	tt.RightClickAt(800, 600)
-	tt.Frame()
-	if shown(tt, "新任务") != 0 {
-		t.Errorf("a right click among the tasks done offers to add one: %q", tt.Texts())
+	click(t, tt, "按周")
+	if !tt.HasText("Buy milk") {
+		t.Errorf("the week does not show the task done: %q", tt.Texts())
 	}
 }
 

@@ -1,6 +1,6 @@
 // Package todo is the to-do list: tasks, each with an optional due date, a
 // note and a repeat, seen through views (today, the next seven days, a
-// week, everything, what is done).
+// week, everything).
 package todo
 
 import (

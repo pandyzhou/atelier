@@ -49,7 +49,6 @@ func TestViews(t *testing.T) {
 	equal(t, "week", titles(d, viewWeek), "周二: 过期的", "周三: 今天的 后加的 做完的", "周五: 周五的")
 	equal(t, "all", titles(d, viewAll),
 		"已过期: 过期的", "今天: 今天的 后加的", "最近 7 天: 周五的", "以后: 下个月的", "没有日期: 没日期的")
-	equal(t, "done", titles(d, viewDone), "今天完成: 做完的")
 }
 
 func TestRepeat(t *testing.T) {

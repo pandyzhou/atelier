@@ -62,12 +62,11 @@ func (t *Todo) View(c *ui.Context) {
 	t.adder(c)
 }
 
-// nav lists the views, then what is done: each with how many tasks it has
-// still to do.
+// nav lists the views, each with how many tasks it has still to do.
 func (t *Todo) nav(c *ui.Context) {
 	item := func(view, label string, glyph func(*ui.Context, ui.Color)) mallow.Item {
 		it := mallow.Item{ID: view, Label: label, Glyph: glyph}
-		if n := t.openIn(view); n > 0 && view != viewDone {
+		if n := t.openIn(view); n > 0 {
 			it.Note = strconv.Itoa(n)
 		}
 		return it
@@ -79,8 +78,6 @@ func (t *Todo) nav(c *ui.Context) {
 			item(viewWeek, "按周", mallow.GlyphCalendar),
 			item(viewAll, "全部", mallow.GlyphList),
 		})
-		mallow.Groove(c).MarginX(4)
-		mallow.SourceList(c, "其他", &t.ui.view, []mallow.Item{item(viewDone, "已完成", mallow.GlyphDone)})
 	})
 }
 
@@ -99,7 +96,7 @@ func (t *Todo) menuOpen(key string) *bool {
 var newEntry = mallow.MenuEntry{ID: "new", Label: "新任务", Glyph: mallow.GlyphPlus}
 
 // taskMenu is what a right click on a task's row offers: to add a task,
-// where the view takes new ones, then what is done with this one.
+// then what is done with this one.
 func (t *Todo) taskMenu(c *ui.Context, row ui.Element, k *Task) {
 	today := t.Today()
 	check := mallow.MenuEntry{ID: "done", Label: "标为完成", Glyph: mallow.GlyphCheck}
@@ -111,16 +108,14 @@ func (t *Todo) taskMenu(c *ui.Context, row ui.Element, k *Task) {
 		repeat.Label = "取消重复"
 	}
 	entries := []mallow.MenuEntry{
+		newEntry,
+		{}, // a line: what follows is about this task
 		{ID: "edit", Label: "编辑", Glyph: mallow.GlyphEdit},
 		check,
 		repeat,
 		{ID: "today", Label: "改到今天", Glyph: mallow.GlyphCalendar},
 		{ID: "tomorrow", Label: "改到明天", Glyph: mallow.GlyphCalendar},
 		{ID: "delete", Label: "删除任务", Glyph: mallow.GlyphTrash, Danger: true},
-	}
-	if t.ui.view != viewDone {
-		// Above a line: it is not about this task.
-		entries = append([]mallow.MenuEntry{newEntry, {}}, entries...)
 	}
 	switch mallow.ContextMenu(c, row, t.menuOpen("task:"+strconv.Itoa(k.ID)), entries) {
 	case "new":
@@ -182,18 +177,13 @@ func (t *Todo) main(c *ui.Context) {
 		})
 	})
 	// A right click anywhere in the view but on a task, which has its own
-	// menu, offers to add one, in the views that take new ones: the only
-	// way to, as no button does.
-	if t.ui.view != viewDone &&
-		mallow.ContextMenu(c, view, t.menuOpen("view"), []mallow.MenuEntry{newEntry}) == newEntry.ID {
+	// menu, offers to add one: the only way to, as no button does.
+	if mallow.ContextMenu(c, view, t.menuOpen("view"), []mallow.MenuEntry{newEntry}) == newEntry.ID {
 		t.startAdding()
 	}
 }
 
 func (t *Todo) emptyText() string {
-	if t.ui.view == viewDone {
-		return "还没有完成的任务。"
-	}
 	return "这里还没有任务。点右键，选“新任务”来添加。"
 }
 
@@ -227,8 +217,6 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 		note = shortDate(t.ui.monday, today) + " — " + shortDate(addDays(t.ui.monday, 6), today) + " · " + note
 	case viewAll:
 		title = "全部"
-	case viewDone:
-		title, note = "已完成", "勾掉的任务都在这里"
 	}
 	ui.Row(c).Shrink(0).PaddingX(4).Gap(16).AlignItems(ui.End).Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {

@@ -13,7 +13,6 @@ const (
 	viewNext7 = "next7"
 	viewWeek  = "week"
 	viewAll   = "all"
-	viewDone  = "done"
 )
 
 var dayNames = [7]string{"周一", "周二", "周三", "周四", "周五", "周六", "周日"}
@@ -77,18 +76,6 @@ func (t *Todo) groups(view, monday string) []group {
 			{title: "最近 7 天", tasks: t.pick(func(k *Task) bool { return open(k) && k.Due > today && k.Due < week })},
 			{title: "以后", tasks: t.pick(func(k *Task) bool { return open(k) && k.Due >= week })},
 			{title: "没有日期", tasks: t.pick(func(k *Task) bool { return open(k) && k.Due == "" })},
-		}
-	case viewDone:
-		done := t.pick(func(k *Task) bool { return k.Done })
-		slices.SortStableFunc(done, func(a, b *Task) int { return strings.Compare(b.DoneAt, a.DoneAt) })
-		for _, k := range done {
-			if n := len(gs); n == 0 || gs[n-1].note != k.DoneAt {
-				gs = append(gs, group{title: dayTitle(k.DoneAt, today) + "完成", note: k.DoneAt})
-			}
-			gs[len(gs)-1].tasks = append(gs[len(gs)-1].tasks, k)
-		}
-		for i := range gs {
-			gs[i].note = ""
 		}
 	}
 	return slices.DeleteFunc(gs, func(g group) bool { return len(g.tasks) == 0 && !g.accent })
