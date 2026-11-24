@@ -12,7 +12,6 @@ const (
 	viewToday = "today"
 	viewNext7 = "next7"
 	viewWeek  = "week"
-	viewMonth = "month"
 	viewAll   = "all"
 )
 

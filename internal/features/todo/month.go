@@ -9,9 +9,49 @@ import (
 	"github.com/pandyzhou/mallow"
 )
 
-// The month view is a calendar: a row for each week of the month shown,
-// Monday first, a cell for each day with the tasks due on it. A task opens
-// in a dialog there, as a cell has no room to unfold it in.
+// The calendar is a page of its own beside the lists', of the same tasks:
+// a row for each week of the month shown, Monday first, a cell for each day
+// with the tasks due on it. A task opens in a dialog there, as a cell has
+// no room to unfold it in.
+
+// Calendar is the calendar's page, as a feature of the app.
+type Calendar struct{ t *Todo }
+
+// Calendar returns the page that shows t's tasks month by month.
+func (t *Todo) Calendar() *Calendar { return &Calendar{t} }
+
+func (m *Calendar) ID() string    { return "calendar" }
+func (m *Calendar) Title() string { return "月历" }
+
+// View builds the page: one card, the month's heading over its weeks.
+func (m *Calendar) View(c *ui.Context) {
+	t := m.t
+	t.show(true)
+	ui.Row(c).Fill().Padding(0, 28, 0, 16).AlignItems(ui.Stretch).Children(func() {
+		page := mallow.Card(c, mallow.Medium).Grow(1).MinWidth(0).Gap(16).Padding(24, 4, 0, 4)
+		page.Children(func() {
+			ui.Column(c).PaddingX(28).Children(func() { t.heading(c, []group{{tasks: t.inMonth(t.ui.month)}}) })
+			t.monthView(c)
+		})
+		// A right click beside the days adds a task too.
+		if mallow.ContextMenu(c, page, t.menuOpen("calendar"), []mallow.MenuEntry{newEntry}) == newEntry.ID {
+			t.startAdding()
+		}
+	})
+	t.adder(c)
+	t.editor(c)
+}
+
+// show says which page is built, the calendar's or the lists'. Going from
+// one to the other closes the task that was open: unfolded in a list, it
+// would come up as a dialog in the calendar.
+func (t *Todo) show(calendar bool) {
+	if t.ui.calendar != calendar {
+		t.ui.calendar = calendar
+		t.closeOpen()
+		t.ui.adding = false
+	}
+}
 
 // monthOf returns the first day of date's month.
 func monthOf(date string) string {
@@ -158,10 +198,10 @@ func (t *Todo) monthChip(c *ui.Context, k *Task, today string) {
 }
 
 // editor is the dialog a task opens in where the view has no room to unfold
-// it in place: in the month view. It edits the task as its details do.
+// it in place: in the calendar. It edits the task as its details do.
 func (t *Todo) editor(c *ui.Context) {
 	k := t.Task(t.ui.open)
-	open := k != nil && t.ui.view == viewMonth
+	open := k != nil && t.ui.calendar
 	if !open {
 		return
 	}

@@ -207,7 +207,11 @@ func TestTodoMonthView(t *testing.T) {
 	d, tt := newTodoTester(t)
 	add(t, tt, "Buy milk")
 	k := d.Tasks()[0]
-	click(t, tt, "按月")
+	// A task unfolded in the list is not open in the calendar.
+	click(t, tt, "打开Buy milk", "月历")
+	if tt.HasText("任务标题") || tt.HasText("按月") {
+		t.Fatalf("the calendar opens with a dialog, or the lists have a month: %q", tt.Texts())
+	}
 	day, _ := time.Parse("2006-01-02", d.Today())
 	if !tt.HasText(fmt.Sprintf("%d 年 %d 月", day.Year(), int(day.Month()))) || !tt.HasText("Buy milk") {
 		t.Fatalf("the month view: %q", tt.Texts())
@@ -697,7 +701,7 @@ func TestFontsKeepLayout(t *testing.T) {
 		return out
 	}
 	fonts := 0
-	for _, page := range []string{"待办", "按月", "设置"} {
+	for _, page := range []string{"待办", "月历", "设置"} {
 		click(t, st, page)
 		for _, s := range sizes {
 			fonts += steady(t, a, s.id, page, func() map[string]place { return places(st) })

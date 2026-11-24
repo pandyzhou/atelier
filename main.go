@@ -22,8 +22,10 @@ import (
 
 // features lists the app's features in sidebar order. Add new ones here.
 func features(s *store.Store) []feature.Feature {
+	tasks := todo.New(s)
 	return []feature.Feature{
-		todo.New(s),
+		tasks,
+		tasks.Calendar(),
 	}
 }
 

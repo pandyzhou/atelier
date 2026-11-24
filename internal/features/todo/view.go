@@ -15,7 +15,10 @@ import (
 type viewState struct {
 	view   string // the view chosen
 	monday string // the Monday of the week the week view shows
-	month  string // the first day of the month the month view shows
+	// calendar is whether the page shown is the calendar's, not the
+	// lists': see Calendar. month is the first day of the month it shows.
+	calendar bool
+	month    string
 	// open is the ID of the task whose details show, 0 for none; title is
 	// what is written as its title, and titleWas its title as they opened.
 	open            int
@@ -50,6 +53,7 @@ const (
 // the one chosen, and the details of the task opened, if one is; over it,
 // the dialog that adds a task, when asked for.
 func (t *Todo) View(c *ui.Context) {
+	t.show(false)
 	// The page is one card, as tall as the sidebar beside it, its parts set
 	// apart by grooves.
 	ui.Row(c).Fill().Padding(0, 28, 0, 16).AlignItems(ui.Stretch).Children(func() {
@@ -88,7 +92,6 @@ func (t *Todo) nav(c *ui.Context) {
 			item(viewToday, "今天", mallow.GlyphCalendar),
 			item(viewNext7, "最近 7 天", mallow.GlyphCalendar),
 			item(viewWeek, "按周", mallow.GlyphCalendar),
-			item(viewMonth, "按月", mallow.GlyphCalendar),
 			item(viewAll, "全部", mallow.GlyphList),
 		}) {
 			t.closeOpen()
@@ -163,11 +166,7 @@ func (t *Todo) taskMenu(c *ui.Context, row ui.Element, k *Task) {
 // openIn counts the tasks still to do that a view lists.
 func (t *Todo) openIn(view string) int {
 	n := 0
-	groups := t.groups(view, mondayOf(t.Today()))
-	if view == viewMonth {
-		groups = []group{{tasks: t.inMonth(t.Today())}}
-	}
-	for _, g := range groups {
+	for _, g := range t.groups(view, mondayOf(t.Today())) {
 		for _, k := range g.tasks {
 			if !k.Done && k.Title != "" {
 				n++
@@ -180,13 +179,6 @@ func (t *Todo) openIn(view string) int {
 // main is the view chosen: its heading, then a card with the line that
 // adds a task and the tasks in their groups.
 func (t *Todo) main(c *ui.Context) {
-	if t.ui.view == viewMonth {
-		ui.Column(c).Grow(1).MinWidth(0).Gap(16).Padding(24, 0, 0, 0).Children(func() {
-			ui.Column(c).PaddingX(28).Children(func() { t.heading(c, []group{{tasks: t.inMonth(t.ui.month)}}) })
-			t.monthView(c)
-		})
-		return
-	}
 	groups := t.withOpen(t.groups(t.ui.view, t.ui.monday))
 	ui.Column(c).Grow(1).MinWidth(0).Gap(20).Padding(24, 0, 0, 0).Children(func() {
 		ui.Column(c).PaddingX(28).Children(func() { t.heading(c, groups) })
@@ -225,6 +217,25 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 	} else {
 		note = "没有未完成的任务"
 	}
+	if t.ui.calendar {
+		d, _ := time.Parse(dateLayout, t.ui.month)
+		title = fmt.Sprintf("%d 年 %d 月", d.Year(), int(d.Month()))
+	} else {
+		title, note = t.viewTitle(today, note)
+	}
+	ui.Row(c).Shrink(0).PaddingX(4).Gap(16).AlignItems(ui.End).Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
+			ui.Text(c, title).FontSize(28).FontWeight(600).TextColor(mallow.Text).SingleLine()
+			ui.Text(c, note).FontSize(14).TextColor(mallow.Muted)
+		})
+		t.headingButtons(c, today)
+	})
+}
+
+// viewTitle names the view chosen, and says the line about it, given what
+// that says of its tasks.
+func (t *Todo) viewTitle(today, note string) (string, string) {
+	title := ""
 	switch t.ui.view {
 	case viewToday:
 		title, note = "今天", dayNote(today)+" · "+note
@@ -235,20 +246,18 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 		_, w := d.ISOWeek()
 		title = fmt.Sprintf("第 %d 周", w)
 		note = shortDate(t.ui.monday, today) + " — " + shortDate(addDays(t.ui.monday, 6), today) + " · " + note
-	case viewMonth:
-		d, _ := time.Parse(dateLayout, t.ui.month)
-		title = fmt.Sprintf("%d 年 %d 月", d.Year(), int(d.Month()))
 	case viewAll:
 		title = "全部"
 	}
-	ui.Row(c).Shrink(0).PaddingX(4).Gap(16).AlignItems(ui.End).Children(func() {
-		ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
-			ui.Text(c, title).FontSize(28).FontWeight(600).TextColor(mallow.Text).SingleLine()
-			ui.Text(c, note).FontSize(14).TextColor(mallow.Muted)
-		})
-		// What acts on the view. A task is added from the context menu
-		// of the list, not from a button here.
-		if t.ui.view == viewWeek {
+	return title, note
+}
+
+// headingButtons are what acts on the view as a whole: the arrows of the
+// week view, and of the calendar. A task is added from the context menu,
+// not from a button here.
+func (t *Todo) headingButtons(c *ui.Context, today string) {
+	{
+		if !t.ui.calendar && t.ui.view == viewWeek {
 			ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
 				if mallow.IconButton(c, "上一周", mallow.GlyphChevronLeft, mallow.IconButtonStyle{Size: 36}).Clicked() {
 					t.ui.monday = addDays(t.ui.monday, -7)
@@ -261,7 +270,7 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 				}
 			})
 		}
-		if t.ui.view == viewMonth {
+		if t.ui.calendar {
 			ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
 				if mallow.IconButton(c, "上一月", mallow.GlyphChevronLeft, mallow.IconButtonStyle{Size: 36}).Clicked() {
 					t.ui.month = addMonths(t.ui.month, -1)
@@ -274,21 +283,23 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 				}
 			})
 		}
-	})
+	}
 }
 
 // startAdding shows the dialog that adds a task, as the context menus ask
-// for it, its draft due today; but in the week view, or the month view, in
+// for it, its draft due today; but in the week view, or the calendar, in
 // the week or the month shown: today if that is this one, else its first
 // day.
 func (t *Todo) startAdding() {
 	today := t.Today()
 	due := today
 	switch {
+	case t.ui.calendar:
+		if monthOf(today) != t.ui.month {
+			due = t.ui.month
+		}
 	case t.ui.view == viewWeek && mondayOf(today) != t.ui.monday:
 		due = t.ui.monday
-	case t.ui.view == viewMonth && monthOf(today) != t.ui.month:
-		due = t.ui.month
 	}
 	t.startAddingOn(due)
 }
