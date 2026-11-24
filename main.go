@@ -26,8 +26,13 @@ import (
 func (a *app) makeFeatures(s *store.Store) []feature.Feature {
 	tasks, table := todo.New(s), timetable.New(s)
 	return []feature.Feature{
-		home.New(tasks, table, home.Options{
-			Model: a.DefaultModel,
+		home.New(s, tasks, table, home.Options{
+			Model:  a.DefaultModel,
+			Models: a.modelChoices,
+			Choose: func(m home.Model) {
+				a.settings.Model, a.settings.ModelName = m.ProviderID, m.Name
+				a.saveSettings()
+			},
 			Complete: func(ctx context.Context, c llm.Config, r llm.Request, onText func(string)) (llm.Message, error) {
 				return a.complete(ctx, c, r, onText)
 			},

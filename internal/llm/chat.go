@@ -49,6 +49,31 @@ type Message struct {
 	kind Kind
 }
 
+// savedMessage is a Message as it is saved, with what its service sent.
+type savedMessage struct {
+	Role   Role            `json:"role"`
+	Text   string          `json:"text,omitempty"`
+	Calls  []Call          `json:"calls,omitempty"`
+	CallID string          `json:"callId,omitempty"`
+	Raw    json.RawMessage `json:"raw,omitempty"`
+	Kind   Kind            `json:"kind,omitempty"`
+}
+
+// MarshalJSON writes a message to be saved and gone on with later.
+func (m Message) MarshalJSON() ([]byte, error) {
+	return json.Marshal(savedMessage{m.Role, m.Text, m.Calls, m.CallID, m.raw, m.kind})
+}
+
+// UnmarshalJSON reads a message MarshalJSON wrote.
+func (m *Message) UnmarshalJSON(data []byte) error {
+	var v savedMessage
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*m = Message{Role: v.Role, Text: v.Text, Calls: v.Calls, CallID: v.CallID, raw: v.Raw, kind: v.Kind}
+	return nil
+}
+
 // Request is a conversation to continue.
 type Request struct {
 	// System tells the model what it is here for.

@@ -12,6 +12,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/pandyzhou/mallow"
 
+	"github.com/pandyzhou/atelier/internal/features/home"
 	"github.com/pandyzhou/atelier/internal/llm"
 )
 
@@ -130,6 +131,19 @@ func (a *app) config(m *modelConfig, model string) (llm.Config, bool) {
 		return llm.Config{}, false
 	}
 	return llm.Config{Kind: llm.Kind(m.Kind), BaseURL: m.BaseURL, Key: key, Model: model}, true
+}
+
+// modelChoices lists every model of every provider, for the first page to
+// choose the default from.
+func (a *app) modelChoices() []home.Model {
+	var out []home.Model
+	for i := range a.settings.Models {
+		m := &a.settings.Models[i]
+		for _, name := range m.Models {
+			out = append(out, home.Model{Provider: providerName(m), ProviderID: m.ID, Name: name, Current: a.isDefault(m, name)})
+		}
+	}
+	return out
 }
 
 // isDefault reports whether a model of a provider is the default one.

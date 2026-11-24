@@ -620,7 +620,8 @@ func TestTimetable(t *testing.T) {
 // calls add a task and a course, their results go back to it, and what it
 // says, and what was done, shows.
 func TestHome(t *testing.T) {
-	a := newApp(store.Open(t.TempDir()))
+	dir := t.TempDir()
+	a := newApp(store.Open(dir))
 	a.win = &fakeWindow{}
 	var tasks *todo.Todo
 	var table *timetable.Timetable
@@ -650,9 +651,25 @@ func TestHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.settings.Models = []modelConfig{{ID: 1, Name: "P", Kind: string(llm.Chat), Key: key, Models: []string{"m"}}}
-	a.settings.Model, a.settings.ModelName = 1, "m"
+	a.settings.Models = []modelConfig{
+		{ID: 1, Name: "P", Kind: string(llm.Chat), Key: key, Models: []string{"m", "m2"}},
+		{ID: 2, Name: "Q", Kind: string(llm.Anthropic), Key: key, Models: []string{"q1"}},
+	}
+	a.settings.Model, a.settings.ModelName = 1, "m2"
 	click(t, tt, "首页")
+	h := a.current().(*home.Home)
+	// The model asked is chosen in the field, among those of every
+	// provider, and is the default from then on.
+	click(t, tt, "选择模型")
+	tt.Frame()
+	if !tt.HasText("q1") || shown(tt, "Q") == 0 {
+		t.Fatalf("the models to choose from: %q", tt.Texts())
+	}
+	click(t, tt, "用模型：m")
+	tt.Frame()
+	if a.settings.Model != 1 || a.settings.ModelName != "m" || tt.HasText("q1") {
+		t.Fatalf("after choosing m: %d %q, texts %q", a.settings.Model, a.settings.ModelName, tt.Texts())
+	}
 
 	var asked []llm.Request
 	call := func(id, name, input string) llm.Call {
@@ -715,11 +732,11 @@ func TestHome(t *testing.T) {
 	if !strings.Contains(asked[1].System, "高等数学") {
 		t.Errorf("the model is not told the course it added: %s", asked[1].System)
 	}
-	if len(growing) != 1 || !strings.Contains(growing[0], "|都加|") || strings.Contains(growing[0], "都加好了") || strings.Contains(growing[0], "正在想") {
+	if len(growing) != 1 || !strings.Contains(growing[0], "都加") || strings.Contains(growing[0], "都加好了") || strings.Contains(growing[0], "正在想") {
 		t.Errorf("as the answer came, the page showed %q", growing)
 	}
-	if shown(tt, "都加好了。") != 1 {
-		t.Errorf("the answer shows %d times: %q", shown(tt, "都加好了。"), tt.Texts())
+	if n := strings.Count(strings.Join(tt.Texts(), "|"), "都加好了。"); n != 1 {
+		t.Errorf("the answer shows %d times: %q", n, tt.Texts())
 	}
 	for _, want := range []string{"2030年1月2日交报告", "已添加任务：交报告", "已添加课程：高等数学 · 周三第 3–4 节", "都加好了。"} {
 		if !tt.HasText(want) {
@@ -747,7 +764,7 @@ func TestHome(t *testing.T) {
 	tt.Type("再试一次")
 	tt.Key(0, ui.KeyEnter)
 	tt.Frame()
-	if !tt.HasText("Key 不对，或者没有权限（401）") || tt.HasText("正在想") || shown(tt, "我来") != 1 {
+	if !tt.HasText("Key 不对，或者没有权限（401）") || tt.HasText("正在想") || !tt.HasText("我来") {
 		t.Errorf("a failed request: %q", tt.Texts())
 	}
 
@@ -756,11 +773,109 @@ func TestHome(t *testing.T) {
 	if tt.HasText("都加好了。") || !tt.HasText("今天想安排点什么？") {
 		t.Errorf("after 新对话: %q", tt.Texts())
 	}
-	// A suggestion is sent as it is.
+	// A suggestion is sent as it is. Its answer is Markdown, shown as it
+	// reads, and can be copied and asked for again.
 	n := len(asked)
+	answers = append(append(answers, make([]llm.Message, n-len(answers))...), llm.Message{Role: llm.Assistant, Text: "明天有 **高等数学**。"}, llm.Message{Role: llm.Assistant, Text: "明天只有一门课。"})
 	click(t, tt, "明天有哪些课？")
+	tt.Frame()
 	if len(asked) != n+1 || len(asked[n].Messages) != 1 || asked[n].Messages[0].Text != "明天有哪些课？" {
-		t.Errorf("a suggestion sent: %+v", asked[n:])
+		t.Fatalf("a suggestion sent: %+v", asked[n:])
+	}
+	if texts := strings.Join(tt.Texts(), "|"); !strings.Contains(texts, "高等数学") || strings.Contains(texts, "**") {
+		t.Errorf("the answer's Markdown shows as %q", tt.Texts())
+	}
+	click(t, tt, "复制回答", "重新生成")
+	tt.Frame()
+	if len(asked) != n+2 || len(asked[n+1].Messages) != 1 || !tt.HasText("明天只有一门课。") || tt.HasText("高等数学") {
+		t.Fatalf("after 重新生成: asked %d times with %+v; texts %q", len(asked), asked[len(asked)-1].Messages, tt.Texts())
+	}
+
+	// An answer that is coming can be stopped: what came of it stays, and
+	// the model is told of it next time.
+	answers = append(answers, llm.Message{}, llm.Message{Role: llm.Assistant, Text: "好的。"})
+	stop := len(asked)
+	inner := a.complete
+	a.complete = func(ctx context.Context, c llm.Config, r llm.Request, onText func(string)) (llm.Message, error) {
+		if len(asked) == stop {
+			asked = append(asked, r)
+			onText("周四有")
+			tt.Frame()
+			if !tt.HasText("停止") {
+				t.Errorf("no way to stop while the answer comes: %q", tt.Texts())
+			}
+			click(t, tt, "停止")
+			if ctx.Err() == nil {
+				t.Errorf("stopping does not end the request")
+			}
+			return llm.Message{}, &llm.Error{Message: "连不上：context canceled"}
+		}
+		return inner(ctx, c, r, onText)
+	}
+	click(t, tt, "给助手的话")
+	tt.Type("那周四呢")
+	tt.Key(0, ui.KeyEnter)
+	// The text comes in over a moment, as it would while it is written.
+	tt.Advance(2 * time.Second)
+	if !tt.HasText("周四有") || tt.HasText("context canceled") || tt.HasText("停止") || shown(tt, "发送") == 0 {
+		t.Fatalf("after stopping: %q", tt.Texts())
+	}
+	click(t, tt, "给助手的话")
+	tt.Type("继续")
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	last := asked[len(asked)-1].Messages
+	if len(last) != 5 || last[3].Role != llm.Assistant || last[3].Text != "周四有" || last[4].Text != "继续" {
+		t.Fatalf("the request after a stopped answer: %+v", last)
+	}
+
+	// The conversations are saved: the panel at the right, shut until
+	// asked for, opens one to go on with.
+	if tt.HasText("打开对话：") {
+		t.Fatalf("the saved conversations show before they are asked for: %q", tt.Texts())
+	}
+	click(t, tt, "历史对话")
+	tt.Frame()
+	first := "打开对话：2030年1月2日交报告，再加一门周三三四节的高…"
+	if shown(tt, first) != 1 || shown(tt, "打开对话：明天有哪些课？") != 1 {
+		t.Fatalf("the saved conversations: %q", tt.Texts())
+	}
+	click(t, tt, first)
+	tt.Frame()
+	if !tt.HasText("都加好了。") || !tt.HasText("已添加任务：交报告") || tt.HasText("好的。") {
+		t.Fatalf("the first conversation opened again: %q", tt.Texts())
+	}
+	// It goes on from where it was: the model is sent all of it.
+	answers = append(answers, llm.Message{Role: llm.Assistant, Text: "不客气。"})
+	before := len(h.Conversations())
+	click(t, tt, "给助手的话")
+	tt.Type("谢谢")
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if got := asked[len(asked)-1].Messages; len(got) < 8 || got[0].Text != "2030年1月2日交报告，再加一门周三三四节的高等数学" || got[len(got)-1].Text != "谢谢" {
+		t.Fatalf("a saved conversation gone on with sends %+v", got)
+	}
+	if len(h.Conversations()) != before || h.Conversations()[0] != "2030年1月2日交报告，再加一门周三三四节的高…" {
+		t.Errorf("after going on with it: %q", h.Conversations())
+	}
+	// After a restart they are there, and one deleted is gone for good.
+	b := newApp(store.Open(dir))
+	b.win = &fakeWindow{}
+	bt := ui.NewTester(b.view, 1280, 800)
+	click(t, bt, "历史对话")
+	bt.Frame()
+	if shown(bt, first) != 1 || shown(bt, "打开对话：明天有哪些课？") != 1 {
+		t.Fatalf("after a restart, the saved conversations: %q", bt.Texts())
+	}
+	click(t, bt, first)
+	bt.Frame()
+	if !bt.HasText("不客气。") {
+		t.Errorf("after a restart, the conversation opened: %q", bt.Texts())
+	}
+	click(t, bt, "删除对话：明天有哪些课？")
+	bt.Frame()
+	if shown(bt, "打开对话：明天有哪些课？") != 0 || len(newApp(store.Open(dir)).features[0].(*home.Home).Conversations()) != 1 {
+		t.Errorf("after deleting a conversation: %q", bt.Texts())
 	}
 }
 
@@ -805,15 +920,18 @@ func TestScreenshot(t *testing.T) {
 	// A model that answers by rote, for the first page: unless
 	// ATELIER_SCREENSHOT_NOMODEL is set, which shows it without one.
 	if os.Getenv("ATELIER_SCREENSHOT_NOMODEL") == "" {
-		a.settings.Models = []modelConfig{{ID: 1, Name: "P", Kind: string(llm.Chat), Models: []string{"m"}}}
-		a.settings.Model, a.settings.ModelName = 1, "m"
+		a.settings.Models = []modelConfig{
+			{ID: 1, Name: "DeepSeek", Kind: string(llm.Chat), Models: []string{"deepseek-chat", "deepseek-reasoner"}},
+			{ID: 2, Name: "Anthropic", Kind: string(llm.Anthropic), Models: []string{"claude-opus-5-5"}},
+		}
+		a.settings.Model, a.settings.ModelName = 1, "deepseek-chat"
 		asked := 0
 		a.complete = func(context.Context, llm.Config, llm.Request, func(string)) (llm.Message, error) {
 			asked++
 			if asked%2 == 1 {
 				return llm.Message{Role: llm.Assistant, Calls: []llm.Call{{ID: "c", Name: "add_task", Input: json.RawMessage(`{"title":"交实验报告","due":"` + day(1) + `"}`)}}}, nil
 			}
-			return llm.Message{Role: llm.Assistant, Text: "今天有两节课：第 1–2 节高等数学（A301），第 5–6 节大学英语（B102）。\n到期的任务有三项：写周报、修登录页的 bug、跑步 30 分钟。\n另外已经帮你加上明天要交的实验报告。"}, nil
+			return llm.Message{Role: llm.Assistant, Text: "今天有两节课：\n\n- **高等数学**，第 1–2 节，A301\n- **大学英语**，第 5–6 节，B102\n\n到期的任务有三项：写周报、修登录页的 bug、跑步 30 分钟。另外已经帮你加上明天要交的 `实验报告`。"}, nil
 		}
 	}
 	for _, f := range a.features {

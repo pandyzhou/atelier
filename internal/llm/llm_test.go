@@ -255,6 +255,21 @@ func TestComplete(t *testing.T) {
 			}
 		}
 
+		// Saved and read again, the message goes back the same.
+		saved, err := json.Marshal(req.Messages)
+		var again []Message
+		if err != nil || json.Unmarshal(saved, &again) != nil || len(again) != 3 || again[1].Text != "好" || len(again[1].Calls) != 1 || again[2].CallID != "c1" {
+			t.Fatalf("%s: saved as %s, read as %+v (%v)", c.kind, saved, again, err)
+		}
+		req.Messages = again
+		if _, err = Complete(ctx(t), cfg, req); err != nil {
+			t.Errorf("%s: %v", c.kind, err)
+		}
+		resent, _ := json.Marshal(s.body)
+		if string(resent) != string(sent) {
+			t.Errorf("%s: after saving, the request is %s, before %s", c.kind, resent, sent)
+		}
+
 		// A conversation begun with another kind's model goes on with this
 		// one: its message is written anew.
 		other := Message{Role: Assistant, Text: "好", Calls: []Call{{ID: "c9", Name: "add_task", Input: json.RawMessage(`{"title":"y"}`)}}}

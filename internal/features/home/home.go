@@ -1,12 +1,14 @@
 // Package home is the app's first page: a field to write to the assistant
 // in, which answers about the tasks and the timetable and adds to them, by
-// the model the user chose in the settings.
+// the model the user chose. The conversations are kept, to go back to.
 package home
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -14,18 +16,31 @@ import (
 	"github.com/pandyzhou/atelier/internal/features/timetable"
 	"github.com/pandyzhou/atelier/internal/features/todo"
 	"github.com/pandyzhou/atelier/internal/llm"
+	"github.com/pandyzhou/atelier/internal/store"
 )
 
 const dateLayout = "2006-01-02"
 
 var dayNames = [7]string{"周一", "周二", "周三", "周四", "周五", "周六", "周日"}
 
+// Model is a model to choose: one of a provider's, in the settings.
+type Model struct {
+	Provider   string // the provider's name
+	ProviderID int
+	Name       string
+	Current    bool // the one asked now
+}
+
 // Options are what the page needs of the app around it.
 type Options struct {
 	// Model returns the model to ask, and whether one is set.
 	Model func() (llm.Config, bool)
-	// Complete asks it, giving onText the answer's text as it comes, off
-	// the UI's thread: llm.Stream, but in tests.
+	// Models lists the models there are to choose from, and Choose makes
+	// one the model asked from now on.
+	Models func() []Model
+	Choose func(Model)
+	// Complete asks the model, giving onText the answer's text as it
+	// comes, off the UI's thread: llm.Stream, but in tests.
 	Complete func(ctx context.Context, c llm.Config, r llm.Request, onText func(string)) (llm.Message, error)
 	// Background runs work off the UI's thread, then what it returns on it.
 	Background func(work func() func())
@@ -38,19 +53,13 @@ type Options struct {
 // Home is the feature.
 type Home struct {
 	Options
+	store *store.Store
+	data  data
 	tasks *todo.Todo
 	table *timetable.Timetable
 	now   func() time.Time
 	ui    viewState
 }
-
-// New returns the page of an assistant for tasks and a timetable.
-func New(tasks *todo.Todo, table *timetable.Timetable, o Options) *Home {
-	return &Home{Options: o, tasks: tasks, table: table, now: time.Now}
-}
-
-func (h *Home) ID() string    { return "home" }
-func (h *Home) Title() string { return "首页" }
 
 // The kinds of entry a conversation shows.
 const (
@@ -60,11 +69,43 @@ const (
 	problem        // what went wrong
 )
 
-// entry is a line of the conversation, as the page shows it.
+// entry is a line of a conversation, as the page shows it.
 type entry struct {
-	kind int
-	text string
+	Kind int    `json:"kind"`
+	Text string `json:"text"`
 }
+
+// conversation is a conversation that was had, as it is saved.
+type conversation struct {
+	ID      int    `json:"id"`
+	Title   string `json:"title"`
+	Updated string `json:"updated"` // when it last went on, RFC 3339
+	// Entries are what it shows, and History what the model is sent of it.
+	Entries []entry       `json:"entries"`
+	History []llm.Message `json:"history"`
+}
+
+// data is what is saved: the conversations, the newest first.
+type data struct {
+	Next          int             `json:"next"`
+	Conversations []*conversation `json:"conversations"`
+}
+
+// kept is how many conversations are saved at most: the oldest go.
+const kept = 100
+
+// New returns the page of an assistant for tasks and a timetable, with
+// the conversations saved in s.
+func New(s *store.Store, tasks *todo.Todo, table *timetable.Timetable, o Options) *Home {
+	h := &Home{Options: o, store: s, tasks: tasks, table: table, now: time.Now, ui: fresh()}
+	if err := s.Load(h.ID(), &h.data); err != nil {
+		log.Printf("home: load: %v", err)
+	}
+	return h
+}
+
+func (h *Home) ID() string    { return "home" }
+func (h *Home) Title() string { return "首页" }
 
 // maxSteps is how many times the model is asked for one message of the
 // user's: once, and again after each round of tools it calls.
@@ -79,19 +120,168 @@ func (h *Home) Send(text string) {
 	}
 	h.ui.entries = append(h.ui.entries, entry{said, text})
 	h.ui.history = append(h.ui.history, llm.Message{Role: llm.User, Text: text})
-	h.ui.busy, h.ui.follow = true, true
+	h.ask()
+}
+
+// ask has the model go on with the conversation as it stands.
+func (h *Home) ask() {
+	h.ui.busy, h.ui.follow, h.ui.copied = true, true, -1
 	h.step(0)
 }
 
-// Reset starts a new conversation; an answer still on its way is dropped.
+// Reset starts a new conversation; the one that showed stays saved.
 func (h *Home) Reset() {
-	h.ui = viewState{run: h.ui.run + 1, growing: -1}
+	h.Stop()
+	h.ui = viewState{run: h.ui.run + 1, growing: -1, copied: -1, panel: h.ui.panel}
+}
+
+// Stop ends the answer that is coming: what of it showed stays.
+func (h *Home) Stop() {
+	if !h.ui.busy {
+		return
+	}
+	if h.ui.cancel != nil {
+		h.ui.cancel()
+	}
+	// What came of the answer is the model's to know of, next time.
+	if g := h.ui.growing; g >= 0 && g < len(h.ui.entries) {
+		if text := strings.TrimSpace(h.ui.entries[g].Text); text != "" {
+			h.ui.entries[g].Text = text
+			h.ui.history = append(h.ui.history, llm.Message{Role: llm.Assistant, Text: text})
+		}
+	}
+	h.ui.run++ // what still comes of it is dropped
+	h.ui.busy, h.ui.growing, h.ui.cancel = false, -1, nil
+	h.keep()
 }
 
 // fail ends the turn with what went wrong.
 func (h *Home) fail(message string) {
 	h.ui.entries = append(h.ui.entries, entry{problem, message})
-	h.ui.busy, h.ui.follow, h.ui.growing = false, true, -1
+	h.done()
+}
+
+// done ends the turn.
+func (h *Home) done() {
+	h.ui.busy, h.ui.follow, h.ui.growing, h.ui.cancel = false, true, -1, nil
+	h.keep()
+}
+
+// lastSaid is where in the entries the user last wrote, -1 for nowhere.
+func (h *Home) lastSaid() int {
+	for i := len(h.ui.entries) - 1; i >= 0; i-- {
+		if h.ui.entries[i].Kind == said {
+			return i
+		}
+	}
+	return -1
+}
+
+// CanRegenerate reports whether the last answer can be asked for again:
+// not while one comes, and not after a turn that did something for the
+// user, which asking again would do twice.
+func (h *Home) CanRegenerate() bool {
+	i := h.lastSaid()
+	if h.ui.busy || i < 0 || i == len(h.ui.entries)-1 {
+		return false
+	}
+	for _, e := range h.ui.entries[i+1:] {
+		if e.Kind == action {
+			return false
+		}
+	}
+	return true
+}
+
+// Regenerate drops what was answered to the user's last message, and asks
+// again.
+func (h *Home) Regenerate() {
+	if !h.CanRegenerate() {
+		return
+	}
+	h.ui.entries = h.ui.entries[:h.lastSaid()+1]
+	for i := len(h.ui.history) - 1; i >= 0; i-- {
+		if h.ui.history[i].Role == llm.User {
+			h.ui.history = h.ui.history[:i+1]
+			break
+		}
+	}
+	h.ask()
+}
+
+// keep saves the conversation that shows, as the newest; one with nothing
+// said is not kept.
+func (h *Home) keep() {
+	if len(h.ui.entries) == 0 {
+		return
+	}
+	var k *conversation
+	for i, o := range h.data.Conversations {
+		if o.ID == h.ui.id {
+			k = o
+			h.data.Conversations = slices.Delete(h.data.Conversations, i, i+1)
+			break
+		}
+	}
+	if k == nil {
+		h.data.Next++
+		k = &conversation{ID: h.data.Next, Title: title(h.ui.entries[0].Text)}
+		h.ui.id = k.ID
+	}
+	k.Updated = h.now().Format(time.RFC3339)
+	k.Entries, k.History = slices.Clone(h.ui.entries), slices.Clone(h.ui.history)
+	h.data.Conversations = slices.Insert(h.data.Conversations, 0, k)
+	if len(h.data.Conversations) > kept {
+		h.data.Conversations = h.data.Conversations[:kept]
+	}
+	h.save()
+}
+
+func (h *Home) save() {
+	if err := h.store.Save(h.ID(), &h.data); err != nil {
+		log.Printf("home: save: %v", err)
+	}
+}
+
+// Conversations returns the titles of the conversations saved, the newest
+// first.
+func (h *Home) Conversations() []string {
+	titles := make([]string, len(h.data.Conversations))
+	for i, k := range h.data.Conversations {
+		titles[i] = k.Title
+	}
+	return titles
+}
+
+// title names a conversation after what it began with.
+func title(text string) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if r := []rune(text); len(r) > 24 {
+		return string(r[:24]) + "…"
+	}
+	return text
+}
+
+// Open shows a conversation that was saved, to go on with.
+func (h *Home) Open(id int) {
+	for _, k := range h.data.Conversations {
+		if k.ID == id {
+			h.Reset()
+			h.ui.id, h.ui.entries, h.ui.history = k.ID, slices.Clone(k.Entries), slices.Clone(k.History)
+			h.ui.follow = true
+			return
+		}
+	}
+}
+
+// Delete forgets a conversation that was saved; the one that shows makes
+// way for a new one.
+func (h *Home) Delete(id int) {
+	if h.ui.id == id {
+		h.Reset()
+	}
+	h.data.Conversations = slices.DeleteFunc(h.data.Conversations, func(k *conversation) bool { return k.ID == id })
+	h.save()
 }
 
 // step asks the model to go on with the conversation, does what it calls
@@ -102,9 +292,11 @@ func (h *Home) step(n int) {
 		h.fail("还没有可用的模型，请先到设置里添加。")
 		return
 	}
-	req := llm.Request{System: h.system(), Messages: append([]llm.Message(nil), h.ui.history...), Tools: tools}
+	req := llm.Request{System: h.system(), Messages: slices.Clone(h.ui.history), Tools: tools}
 	run := h.ui.run
 	h.ui.growing = -1
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	h.ui.cancel = cancel
 	// The text that came and does not show yet: it comes off the UI's
 	// thread, piece by piece, and is shown on it, all there is at once.
 	var mu sync.Mutex
@@ -130,12 +322,11 @@ func (h *Home) step(n int) {
 		})
 	}
 	h.Background(func() func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		defer cancel()
 		msg, err := h.Complete(ctx, cfg, req, onText)
+		cancel()
 		return func() {
 			if run != h.ui.run {
-				return // a new conversation was started meanwhile
+				return // stopped, or another conversation shows
 			}
 			if err != nil {
 				h.fail(err.Error())
@@ -146,13 +337,13 @@ func (h *Home) step(n int) {
 			// The whole answer, in place of what of it showed as it came.
 			if text := strings.TrimSpace(msg.Text); text == "" {
 			} else if g := h.ui.growing; g >= 0 && g < len(h.ui.entries) {
-				h.ui.entries[g].text = text
+				h.ui.entries[g].Text = text
 			} else {
 				h.ui.entries = append(h.ui.entries, entry{answer, text})
 			}
 			h.ui.growing = -1
 			if len(msg.Calls) == 0 {
-				h.ui.busy = false
+				h.done()
 				return
 			}
 			for _, call := range msg.Calls {
@@ -174,7 +365,7 @@ func (h *Home) grow(text string) {
 		return
 	}
 	if g := h.ui.growing; g >= 0 && g < len(h.ui.entries) {
-		h.ui.entries[g].text += text
+		h.ui.entries[g].Text += text
 	} else {
 		h.ui.entries = append(h.ui.entries, entry{answer, text})
 		h.ui.growing = len(h.ui.entries) - 1
@@ -374,7 +565,7 @@ func (h *Home) system() string {
 	fmt.Fprintf(&b, "现在是 %s %s %s。\n", now.Format(dateLayout), dayNames[(int(now.Weekday())+6)%7], now.Format("15:04"))
 	b.WriteString(`
 规则：
-- 用简短的中文回答，只写纯文本，不要用 Markdown 符号。
+- 用简短的中文回答。可以用 Markdown 的列表和加粗让安排一目了然，不要加标题，不要长篇大论。
 - 用户说“明天”“下周三”这类相对日期时，换算成具体日期再查或再添加。
 - 问某天的安排时，把那天的课和到期的任务都说出来。
 - 添加前信息不全（比如课程没说星期几、第几节）就先问清楚，不要猜。
