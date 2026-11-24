@@ -475,6 +475,22 @@ var tools = []llm.Tool{
 		}),
 	},
 	{
+		Name:        "set_periods",
+		Description: "设置课表每天有几节课，以及各节的起止时间。两样都可以只填一样；times 里只写要改的节次，没写的保持原样。节数不能少于已有课程排到的节次。",
+		Parameters: schema([]string{}, map[string]any{
+			"count": prop("integer", "每天的节数，1 到 16"),
+			"times": map[string]any{
+				"type":        "array",
+				"description": "各节的时间",
+				"items": schema([]string{"period", "start", "end"}, map[string]any{
+					"period": prop("integer", "第几节，从 1 开始"),
+					"start":  prop("string", "开始时间，24 小时制 HH:MM；填空字符串表示清空"),
+					"end":    prop("string", "结束时间，24 小时制 HH:MM；填空字符串表示清空"),
+				}),
+			},
+		}),
+	},
+	{
 		Name:        "list_tasks",
 		Description: "按到期日期查询任务，包括已完成的。提示里已经列出未完成的任务，只有要查已完成的或核对时才需要用。",
 		Parameters: schema([]string{"from", "to"}, map[string]any{
@@ -702,6 +718,76 @@ func (h *Home) call(c llm.Call) string {
 		h.table.Remove(k.ID)
 		did("已删除课程：" + name)
 		return "已删除"
+	case "set_periods":
+		var in struct {
+			Count *int
+			Times []struct {
+				Period     int
+				Start, End string
+			}
+		}
+		if err := json.Unmarshal(c.Input, &in); err != nil {
+			return "参数不对：" + err.Error()
+		}
+		if in.Count == nil && len(in.Times) == 0 {
+			return "没有要改的：count 和 times 都没有填"
+		}
+		// All of it is looked over before any of it is done.
+		n := len(h.table.Periods())
+		if in.Count != nil {
+			least := 1
+			for _, k := range h.table.Courses() {
+				least = max(least, k.To)
+			}
+			switch {
+			case *in.Count < 1 || *in.Count > 16:
+				return "没有修改：每天的节数要在 1 到 16 之间"
+			case *in.Count < least:
+				return fmt.Sprintf("没有修改：已有课程排到第 %d 节，每天不能少于 %d 节", least, least)
+			}
+			n = *in.Count
+		}
+		for i := range in.Times {
+			p := &in.Times[i]
+			p.Start, p.End = strings.TrimSpace(p.Start), strings.TrimSpace(p.End)
+			if p.Period < 1 || p.Period > n {
+				return fmt.Sprintf("没有修改：没有第 %d 节，每天是 %d 节", p.Period, n)
+			}
+			// A time is kept as 08:20, however it was written.
+			for _, at := range []*string{&p.Start, &p.End} {
+				if *at == "" {
+					continue
+				}
+				clock, err := time.Parse("15:04", *at)
+				if err != nil {
+					return fmt.Sprintf("没有修改：第 %d 节的时间“%s”要写成 HH:MM", p.Period, *at)
+				}
+				*at = clock.Format("15:04")
+			}
+			if p.Start != "" && p.End != "" && p.End <= p.Start {
+				return fmt.Sprintf("没有修改：第 %d 节的结束时间要晚于开始时间", p.Period)
+			}
+		}
+		var changes []string
+		if n != len(h.table.Periods()) {
+			h.table.SetPeriods(n)
+			changes = append(changes, fmt.Sprintf("每天 %d 节", n))
+		}
+		timed := 0
+		for _, p := range in.Times {
+			if was := h.table.Periods()[p.Period-1]; was.Start != p.Start || was.End != p.End {
+				h.table.SetTime(p.Period, timetable.Period{Start: p.Start, End: p.End})
+				timed++
+			}
+		}
+		if timed > 0 {
+			changes = append(changes, fmt.Sprintf("改了 %d 节的时间", timed))
+		}
+		if len(changes) == 0 {
+			return "没有要改的：节次已经是这样了"
+		}
+		did("已设置节次：" + strings.Join(changes, "，"))
+		return "已设置，现在是：\n" + h.periodLines()
 	case "list_tasks":
 		var in struct{ From, To string }
 		if err := json.Unmarshal(c.Input, &in); err != nil {
@@ -790,6 +876,23 @@ func (h *Home) taskLine(k *todo.Task) string {
 	return b.String()
 }
 
+// periodLines writes the day's periods for the model, each on a line with
+// when it is, where that is set.
+func (h *Home) periodLines() string {
+	var b strings.Builder
+	for i, p := range h.table.Periods() {
+		fmt.Fprintf(&b, "第 %d 节 ", i+1)
+		switch {
+		case p.Start == "" && p.End == "":
+			b.WriteString("没有设时间")
+		default:
+			b.WriteString(orNone(p.Start) + "–" + orNone(p.End))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 // courseLine writes a course for the model, on a line: its ID first, by
 // which the model says which course it means.
 func (h *Home) courseLine(k *timetable.Course) string {
@@ -829,10 +932,11 @@ func (h *Home) system() string {
 - 任务可以修改、标为完成和删除，课程可以修改和删除，用前面方括号里的 id 指明是哪一条；回答用户时不要提 id。
 - 删除不能恢复：只在用户明确说要删时才删，指不清是哪一条、或者一次要删好几条时，先列出来问清楚。
 - 用户附上图片或文件时，按里面的内容回答。要据此添加好几条任务或课程时，先把读到的列出来让用户确认，再添加。
-- 每天有几节课、每节课的时间不能改。用户要改这些时，请他到“课表”页面操作。
+- 每天有几节课、每节的起止时间可以用 set_periods 设置。照着用户给的课表添加课程时，节数不够就先加够，上面写了时间的也一并设好。
 `)
 	periods := h.table.Periods()
-	fmt.Fprintf(&b, "\n课表（每周相同，每天 %d 节）：\n", len(periods))
+	fmt.Fprintf(&b, "\n每天 %d 节课，各节的时间：\n%s", len(periods), h.periodLines())
+	b.WriteString("\n课表（每周相同）：\n")
 	if len(h.table.Courses()) == 0 {
 		b.WriteString("还没有课程。\n")
 	}

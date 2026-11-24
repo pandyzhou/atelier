@@ -875,6 +875,39 @@ func TestHome(t *testing.T) {
 		t.Fatalf("after delete_course: %d courses, %q", len(table.Courses()), tt.Texts())
 	}
 
+	// The day's periods and their times are set, all of what is asked or
+	// none of it: not fewer than the courses go to, nor a time that is none.
+	answers = append(answers,
+		llm.Message{Role: llm.Assistant, Calls: []llm.Call{
+			call("c12", "set_periods", `{"count":2}`),
+			call("c13", "set_periods", `{"count":12,"times":[{"period":1,"start":"8:20","end":"09:00"},{"period":13,"start":"20:00","end":"20:40"}]}`),
+			call("c14", "set_periods", `{"times":[{"period":2,"start":"九点","end":"09:45"}]}`),
+			call("c15", "set_periods", `{"count":12,"times":[{"period":1,"start":"08:20","end":"09:00"},{"period":12,"start":"20:00","end":"20:40"}]}`),
+		}},
+		llm.Message{Role: llm.Assistant, Text: "设好了。"})
+	if _, err := table.Put(timetable.Course{Name: "晚自习", Day: 5, From: 9, To: 10}); err != nil {
+		t.Fatal(err)
+	}
+	say("每天十二节，第一节八点二十到九点，第十二节晚上八点到八点四十")
+	if !strings.Contains(asked[len(asked)-2].System, "每天 10 节课") || !strings.Contains(asked[len(asked)-2].System, "第 1 节 没有设时间") {
+		t.Errorf("the model is not told the periods: %s", asked[len(asked)-2].System)
+	}
+	if p := table.Periods(); len(p) != 12 || p[0] != (timetable.Period{Start: "08:20", End: "09:00"}) || p[11] != (timetable.Period{Start: "20:00", End: "20:40"}) || p[1] != (timetable.Period{}) {
+		t.Fatalf("the periods after set_periods: %+v", p)
+	}
+	got := asked[len(asked)-1].Messages
+	for i, want := range []string{"每天不能少于 10 节", "没有第 13 节", "要写成 HH:MM", "第 12 节 20:00–20:40"} {
+		if text := got[len(got)-4+i].Text; !strings.Contains(text, want) {
+			t.Errorf("the model is told %q, not %q", text, want)
+		}
+	}
+	if !tt.HasText("已设置节次：每天 12 节，改了 2 节的时间") {
+		t.Errorf("the periods' change does not show: %q", tt.Texts())
+	}
+	if !strings.Contains(asked[len(asked)-1].System, "每天 12 节课") {
+		t.Errorf("the model is not told the new periods: %s", asked[len(asked)-1].System)
+	}
+
 	// What goes wrong shows, and the field takes the next message.
 	click(t, tt, "给助手的话")
 	tt.Type("再试一次")

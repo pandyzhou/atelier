@@ -155,6 +155,16 @@ func (t *Timetable) SetPeriods(n int) {
 	t.save()
 }
 
+// SetTime sets when a period, from 1, starts and ends: nothing of one
+// there is not.
+func (t *Timetable) SetTime(period int, p Period) {
+	if period < 1 || period > len(t.data.Periods) {
+		return
+	}
+	t.data.Periods[period-1] = Period{Start: strings.TrimSpace(p.Start), End: strings.TrimSpace(p.End)}
+	t.save()
+}
+
 func (t *Timetable) save() {
 	if err := t.store.Save(t.ID(), &t.data); err != nil {
 		log.Printf("timetable: save: %v", err)
