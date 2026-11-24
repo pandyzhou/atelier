@@ -897,7 +897,7 @@ func TestModelSettings(t *testing.T) {
 	}
 	// Tested without a model, it says what is missing.
 	click(t, tt, "测试连接")
-	if len(pinged) != 0 || !tt.HasText("先在上面添加一个模型") {
+	if len(pinged) != 0 || !tt.HasText("先添加一个模型") {
 		t.Fatalf("a test without a model: sent %+v, %q", pinged, tt.Texts())
 	}
 
@@ -907,7 +907,13 @@ func TestModelSettings(t *testing.T) {
 	tt.Type("https://api.example.com/v1")
 	click(t, tt, "API Key")
 	tt.Type("sk-secret-123")
-	click(t, tt, "添加模型名")
+	// The dialog that adds models asks the service for its list, with the
+	// key there is now; a name typed is added by Enter, listed or not.
+	click(t, tt, "添加模型")
+	tt.Frame()
+	if len(listed) != 1 || listed[0].Key != "sk-secret-123" || listed[0].BaseURL != "https://api.example.com/v1" {
+		t.Fatalf("the list was asked with %+v", listed)
+	}
 	tt.Type("some-model")
 	tt.Key(0, ui.KeyEnter)
 	tt.Frame()
@@ -925,6 +931,20 @@ func TestModelSettings(t *testing.T) {
 	if data, err := os.ReadFile(filepath.Join(dir, "settings.json")); err != nil || strings.Contains(string(data), "sk-secret") {
 		t.Fatalf("settings.json: %v, holds the key: %v", err, strings.Contains(string(data), "sk-secret"))
 	}
+	// The list offers the models not added yet, and what is typed narrows
+	// it; a name it does not have can be added all the same.
+	if shown(tt, "添加other-model") != 1 || shown(tt, "添加some-model") != 0 || !tt.HasText("已添加") {
+		t.Fatalf("the list offers: %q", tt.Texts())
+	}
+	tt.Type("zzz")
+	tt.Frame()
+	if shown(tt, "添加other-model") != 0 || shown(tt, "添加zzz") != 1 {
+		t.Fatalf("with zzz typed, the list offers: %q", tt.Texts())
+	}
+	for range 3 {
+		tt.Key(0, ui.KeyBackspace)
+	}
+	click(t, tt, "完成")
 	// The first model added is the default.
 	want := llm.Config{Kind: llm.Chat, BaseURL: "https://api.example.com/v1", Key: "sk-secret-123", Model: "some-model"}
 	if c, ok := a.DefaultModel(); !ok || c != want {
@@ -943,19 +963,13 @@ func TestModelSettings(t *testing.T) {
 		t.Errorf("a failed test does not say why: %q", tt.Texts())
 	}
 
-	// The service's list offers the models not added yet.
-	click(t, tt, "获取模型列表")
+	click(t, tt, "添加模型")
 	tt.Frame()
-	if len(listed) != 1 || listed[0].Key != "sk-secret-123" || listed[0].BaseURL != want.BaseURL {
-		t.Fatalf("the list was asked with %+v", listed)
-	}
-	if shown(tt, "添加other-model") != 1 || shown(tt, "添加some-model") != 0 {
-		t.Fatalf("the list offers: %q", tt.Texts())
-	}
 	click(t, tt, "添加other-model")
 	if got := a.settings.Models[0].Models; !slices.Equal(got, []string{"some-model", "other-model"}) {
 		t.Fatalf("after adding from the list: %q", got)
 	}
+	click(t, tt, "完成")
 	// Another model is made the default; taking it away gives that back.
 	click(t, tt, "把other-model设为默认")
 	if c, _ := a.DefaultModel(); c.Model != "other-model" {
@@ -973,10 +987,10 @@ func TestModelSettings(t *testing.T) {
 
 	// A second provider's model can be the default; deleting that provider
 	// gives it back to the first.
-	click(t, tt, "收起", "添加供应商", "添加模型名")
+	click(t, tt, "添加供应商", "添加模型")
 	tt.Type("second-model")
 	tt.Key(0, ui.KeyEnter)
-	click(t, tt, "把second-model设为默认")
+	click(t, tt, "完成", "把second-model设为默认")
 	if a.settings.Model != a.settings.Models[1].ID || a.settings.ModelName != "second-model" {
 		t.Fatalf("after 设为默认 in a second provider: %d %q", a.settings.Model, a.settings.ModelName)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,9 +39,12 @@ type modelConfig struct {
 
 // modelsState is what the models' part of the settings shows.
 type modelsState struct {
-	open  int    // the ID of the provider whose card is open, 0 for none
-	key   string // what is typed as its key: sealed and saved as it changes
-	draft string // what is typed as a model to add to it
+	open int    // the ID of the provider that shows, 0 for the first
+	key  string // what is typed as its key: sealed and saved as it changes
+	// adding is whether the dialog that adds models to it shows, and draft
+	// what is typed there: a model's name, or a part of one to look for.
+	adding bool
+	draft  string
 	// tests are the outcomes of testing a provider's connection, and
 	// lists what its service said its models are, by its ID.
 	tests map[int]modelTest
@@ -158,9 +162,18 @@ func (a *app) addProvider() {
 	a.saveSettings()
 }
 
-// openProvider opens a provider's card, 0 for none.
+// openProvider shows a provider, 0 for the first there is.
 func (a *app) openProvider(id int) {
-	a.models.open, a.models.key, a.models.draft = id, "", ""
+	a.models.open, a.models.key, a.models.draft, a.models.adding = id, "", "", false
+}
+
+// startAddingModels shows the dialog that adds models to a provider, and
+// asks its service for the models it has when there is a key to ask with.
+func (a *app) startAddingModels(m *modelConfig) {
+	a.models.adding, a.models.draft = true, ""
+	if list := a.models.lists[m.ID]; m.Key != "" && !list.running && len(list.names) == 0 {
+		a.fetchModels(m)
+	}
 }
 
 // removeProvider deletes a provider and its models.
@@ -203,7 +216,7 @@ func (a *app) testProvider(m *modelConfig) {
 		a.models.tests = map[int]modelTest{}
 	}
 	if len(m.Models) == 0 {
-		a.models.tests[id] = modelTest{message: "先在上面添加一个模型，测试要用它发一句话"}
+		a.models.tests[id] = modelTest{message: "先添加一个模型，测试要用它发一句话"}
 		return
 	}
 	model := m.Models[0]
@@ -272,33 +285,68 @@ func (a *app) background(work func() func()) {
 	}()
 }
 
+// providersBeside is the least width of the window that has room for the
+// providers beside the one that shows; narrower, they go above it.
+const providersBeside = 1120
+
 // modelSettings are the providers, and their models, the app's features
-// can use.
+// can use: the providers down the left, and the one chosen beside them.
 func (a *app) modelSettings(c *ui.Context, _ func(name, note string, width float32, control func())) {
-	ui.Text(c, "先添加供应商，填上它的接口、地址和 Key，再把要用的模型加到它下面。AI 功能会用标了“默认”的那个模型。Key 加密后保存在这台电脑上，不会明文写进数据文件。").
-		FontSize(13).TextColor(mallow.Muted).Padding(4, 4, 12, 4)
-	remove := 0
-	for i := range a.settings.Models {
-		m := &a.settings.Models[i]
-		if m.ID == a.models.open {
-			if a.providerCard(c.Key(m.ID), m) {
-				remove = m.ID
-			}
-		} else {
-			a.providerRow(c.Key(m.ID), m)
-		}
-	}
-	if remove != 0 {
-		a.removeProvider(remove)
-	}
+	ui.Text(c, "AI 功能会用标了“默认”的那个模型。Key 加密后保存在这台电脑上，不会明文写进数据文件。").
+		FontSize(13).TextColor(mallow.Muted).Padding(4, 4, 16, 4)
 	if len(a.settings.Models) == 0 {
 		ui.Text(c, "还没有供应商。").FontSize(14).TextColor(mallow.Muted).Padding(8, 4)
+		ui.Row(c).Padding(8, 4, 0, 4).Children(func() {
+			if mallow.Button(c, "添加供应商").Clicked() {
+				a.addProvider()
+			}
+		})
+		return
 	}
-	ui.Row(c).Padding(16, 4, 0, 4).Children(func() {
-		if mallow.Button(c, "添加供应商").Clicked() {
-			a.addProvider()
+	if a.model(a.models.open) == nil {
+		a.openProvider(a.settings.Models[0].ID)
+	}
+	providers := func() {
+		items := make([]mallow.Item, len(a.settings.Models))
+		for i := range a.settings.Models {
+			m := &a.settings.Models[i]
+			items[i] = mallow.Item{ID: strconv.Itoa(m.ID), Label: providerName(m)}
+			if m.ID == a.settings.Model && a.settings.ModelName != "" {
+				items[i].Note = "默认"
+			}
 		}
-	})
+		chosen := strconv.Itoa(a.models.open)
+		if mallow.SourceList(c, "供应商", &chosen, items) {
+			id, _ := strconv.Atoi(chosen)
+			a.openProvider(id)
+		}
+		ui.Row(c).Padding(8, 0, 0, 0).Children(func() {
+			if mallow.Button(c, "添加供应商").Clicked() {
+				a.addProvider()
+			}
+		})
+	}
+	remove := false
+	detail := func(e ui.Element) {
+		// Built after the list, which may have chosen another.
+		if m := a.model(a.models.open); m != nil {
+			remove = a.providerDetail(c.Key(m.ID), e, m)
+		}
+	}
+	if w, _ := c.Size(); w >= providersBeside {
+		ui.Row(c).AlignItems(ui.Stretch).Children(func() {
+			ui.Column(c).Width(176).Shrink(0).Gap(4).Children(providers)
+			mallow.GrooveV(c).Margin(0, 20)
+			detail(ui.Column(c).Grow(1).MinWidth(0))
+		})
+	} else {
+		ui.Column(c).Gap(4).Children(providers)
+		mallow.Groove(c).Margin(16, 0)
+		detail(ui.Column(c))
+	}
+	if remove {
+		a.removeProvider(a.models.open)
+	}
 }
 
 // providerName is what a provider is called, one without a name too.
@@ -309,31 +357,9 @@ func providerName(m *modelConfig) string {
 	return "未命名的供应商"
 }
 
-// providerRow is a provider in the list: its name, what it is, and the
-// default model if it is one of its. It opens the provider's card.
-func (a *app) providerRow(c *ui.Context, m *modelConfig) {
-	mallow.ListRow(c, false).Children(func() {
-		body := mallow.Plain(c, "打开"+providerName(m)).Grow(1).MinWidth(0).Padding(10, 8).Gap(12)
-		body.Children(func() {
-			ui.Text(c, providerName(m)).FontSize(14).FontWeight(500).TextColor(mallow.Text).SingleLine()
-			what := kindLabel(m.Kind) + " · " + fmt.Sprintf("%d 个模型", len(m.Models))
-			if len(m.Models) == 0 {
-				what = kindLabel(m.Kind) + " · 还没有模型"
-			}
-			ui.Text(c, what).Grow(1).MinWidth(0).FontSize(12).TextColor(mallow.Muted).SingleLine()
-			if m.ID == a.settings.Model && a.settings.ModelName != "" {
-				ui.Text(c, "默认："+a.settings.ModelName).FontSize(12).FontWeight(500).TextColor(mallow.Accent).SingleLine()
-			}
-		})
-		if body.Clicked() {
-			a.openProvider(m.ID)
-		}
-	})
-}
-
-// providerCard is the provider that is open: a card that edits it and its
-// models. It reports whether the provider is to be deleted.
-func (a *app) providerCard(c *ui.Context, m *modelConfig) (remove bool) {
+// providerDetail fills e with the provider that shows: what edits it, and
+// its models. It reports whether the provider is to be deleted.
+func (a *app) providerDetail(c *ui.Context, e ui.Element, m *modelConfig) (remove bool) {
 	line := func(name string, width float32, control func()) {
 		ui.Row(c).Gap(12).AlignItems(ui.Start).Children(func() {
 			mallow.Label(c, name).Width(48).Shrink(0).Padding(9, 0, 0, 0)
@@ -341,18 +367,13 @@ func (a *app) providerCard(c *ui.Context, m *modelConfig) (remove bool) {
 		})
 	}
 	changed := false
-	card := mallow.Card(c, mallow.Small).Margin(10, 4).Padding(12, 16, 16, 16).Gap(14)
-	card.OnShortcut(0, ui.KeyEscape, func() { a.openProvider(0) })
-	card.Children(func() {
+	e.Gap(14).Children(func() {
 		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-			if mallow.TextInput(c, &m.Name).Placeholder("供应商的名字，随便起").Label("供应商名称").Grow(1).MinWidth(0).Margin(0, 8, 0, 0).Changed() {
+			if mallow.TextInput(c, &m.Name).Placeholder("供应商的名字，随便起").Label("供应商名称").FontSize(16).Grow(1).MinWidth(0).Margin(0, 8, 0, 0).Changed() {
 				changed = true
 			}
 			if mallow.GhostIconButton(c, "删除供应商", mallow.GlyphTrash, mallow.IconButtonStyle{Danger: true}).Clicked() {
 				remove = true
-			}
-			if mallow.GhostIconButton(c, "收起", mallow.GlyphClose, mallow.IconButtonStyle{}).Clicked() {
-				a.openProvider(0)
 			}
 		})
 		line("接口", 440, func() {
@@ -373,38 +394,39 @@ func (a *app) providerCard(c *ui.Context, m *modelConfig) (remove bool) {
 			ui.Text(c, "请求会发到 "+cfg.Endpoint()).FontSize(12).TextColor(mallow.Muted)
 		})
 		line("Key", 560, func() {
-			hint := "粘贴 API Key"
-			if m.Key != "" {
-				hint = "已保存。要换一个，就在这里重新粘贴"
-			}
-			if mallow.TextInput(c, &a.models.key).Password().Placeholder(hint).Label("API Key").Changed() {
-				// Emptying the field keeps the key that is saved.
-				if key := strings.TrimSpace(a.models.key); key != "" {
-					sealed, err := a.box.Seal(key)
-					if err != nil {
-						log.Printf("models: sealing a key: %v", err)
-					} else {
-						m.Key, changed = sealed, true
+			test := a.models.tests[m.ID]
+			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+				hint := "粘贴 API Key"
+				if m.Key != "" {
+					hint = "已保存。要换一个，就在这里重新粘贴"
+				}
+				if mallow.TextInput(c, &a.models.key).Password().Placeholder(hint).Label("API Key").Grow(1).MinWidth(0).Changed() {
+					// Emptying the field keeps the key that is saved.
+					if key := strings.TrimSpace(a.models.key); key != "" {
+						sealed, err := a.box.Seal(key)
+						if err != nil {
+							log.Printf("models: sealing a key: %v", err)
+						} else {
+							m.Key, changed = sealed, true
+						}
 					}
 				}
-			}
-		})
-		line("模型", 560, func() { a.providerModels(c, m) })
-		test := a.models.tests[m.ID]
-		ui.Row(c).Gap(12).AlignItems(ui.Center).Padding(4, 0, 0, 60).Children(func() {
-			if mallow.Button(c, "测试连接").Clicked() && !test.running {
-				a.testProvider(m)
-				test = a.models.tests[m.ID]
-			}
+				if mallow.Button(c, "测试连接").Clicked() && !test.running {
+					a.testProvider(m)
+					test = a.models.tests[m.ID]
+				}
+			})
 			switch {
 			case test.running:
-				ui.Text(c, "正在测试…").Grow(1).MinWidth(0).FontSize(13).TextColor(mallow.Muted)
+				ui.Text(c, "正在测试…").FontSize(12).TextColor(mallow.Muted)
 			case test.ok:
-				ui.Text(c, test.message).Grow(1).MinWidth(0).FontSize(13).TextColor(mallow.Success)
+				ui.Text(c, test.message).FontSize(12).TextColor(mallow.Success)
 			case test.message != "":
-				ui.Text(c, test.message).Grow(1).MinWidth(0).FontSize(13).TextColor(mallow.Danger)
+				ui.Text(c, test.message).FontSize(12).TextColor(mallow.Danger)
 			}
 		})
+		mallow.Groove(c).Margin(4, 0)
+		a.providerModels(c, m)
 	})
 	if changed {
 		// What was tested, and what was listed, is no longer what is set.
@@ -412,75 +434,123 @@ func (a *app) providerCard(c *ui.Context, m *modelConfig) (remove bool) {
 		delete(a.models.lists, m.ID)
 		a.saveSettings()
 	}
+	a.modelAdder(c, m)
 	return remove
 }
 
-// listShown is how many of the models a service lists show at most: some
-// services list hundreds.
-const listShown = 80
-
-// providerModels are a provider's models: those added, each to make the
-// default or to take away; a field that adds one by its name; and the
-// service's own list to add from, when asked for.
+// providerModels are a provider's models: each to make the default or to
+// take away, under a button that opens the dialog adding more.
 func (a *app) providerModels(c *ui.Context, m *modelConfig) {
-	var drop string
-	for _, name := range m.Models {
-		ui.Row(c.Key("model:" + name)).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, name).Grow(1).MinWidth(0).Padding(0, 4).FontSize(14).TextColor(mallow.Text).SingleLine()
-			if a.isDefault(m, name) {
-				ui.Text(c, "默认").FontSize(12).FontWeight(500).TextColor(mallow.Accent).Padding(0, 8)
-			} else if mallow.Plain(c, "把"+name+"设为默认").Padding(4, 8).Children(func() {
-				ui.Text(c, "设为默认").FontSize(12).TextColor(mallow.Muted)
-			}).Clicked() {
-				a.settings.Model, a.settings.ModelName = m.ID, name
-				a.saveSettings()
-			}
-			if mallow.GhostIconButton(c, "移除"+name, mallow.GlyphClose, mallow.IconButtonStyle{Danger: true}).Clicked() {
-				drop = name
-			}
-		})
+	ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+		mallow.Label(c, "模型").Grow(1)
+		if mallow.Button(c, "添加模型").Clicked() {
+			a.startAddingModels(m)
+		}
+	})
+	if len(m.Models) == 0 {
+		ui.Text(c, "还没有模型。").FontSize(13).TextColor(mallow.Muted)
+		return
 	}
+	var drop string
+	ui.Column(c).Gap(2).Children(func() {
+		for _, name := range m.Models {
+			ui.Row(c.Key("model:" + name)).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, name).Grow(1).MinWidth(0).FontSize(14).TextColor(mallow.Text).SingleLine()
+				if a.isDefault(m, name) {
+					ui.Text(c, "默认").FontSize(12).FontWeight(500).TextColor(mallow.Accent).Padding(0, 8)
+				} else if mallow.Plain(c, "把"+name+"设为默认").Padding(4, 8).Children(func() {
+					ui.Text(c, "设为默认").FontSize(12).TextColor(mallow.Muted)
+				}).Clicked() {
+					a.settings.Model, a.settings.ModelName = m.ID, name
+					a.saveSettings()
+				}
+				if mallow.GhostIconButton(c, "移除"+name, mallow.GlyphClose, mallow.IconButtonStyle{Danger: true}).Clicked() {
+					drop = name
+				}
+			})
+		}
+	})
 	if drop != "" {
 		a.removeModelName(m, drop)
 	}
-	list := a.models.lists[m.ID]
-	ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-		add := mallow.TextInput(c, &a.models.draft).Placeholder("模型名，回车添加，如 deepseek-chat").Label("添加模型名").Grow(1).MinWidth(0)
-		if add.Submitted() {
-			a.addModelName(m, a.models.draft)
-			a.models.draft = ""
+}
+
+// listShown is how many of the models a service lists show at most: some
+// services list hundreds, and what is typed narrows them.
+const listShown = 60
+
+// modelAdder is the dialog that adds models to a provider. What is typed
+// looks through the models its service lists, each added with its plus;
+// and it is a model's name itself, which Enter adds, for the services that
+// list none. It stays open, to add several.
+func (a *app) modelAdder(c *ui.Context, m *modelConfig) {
+	mallow.Dialog(c, &a.models.adding, mallow.DialogOptions{Title: "添加模型", Width: 480}, func() {
+		field := mallow.TextInput(c, &a.models.draft).Placeholder("搜索，或者直接填模型名").Label("搜索或填写模型名").AutoFocus()
+		typed := strings.TrimSpace(a.models.draft)
+		if field.Submitted() {
+			a.addModelName(m, typed)
+			a.models.draft, typed = "", ""
 		}
-		if mallow.Button(c, "获取模型列表").Clicked() && !list.running {
-			a.fetchModels(m)
-			list = a.models.lists[m.ID]
-		}
-	})
-	switch {
-	case list.running:
-		ui.Text(c, "正在向服务要模型列表…").FontSize(12).TextColor(mallow.Muted)
-	case list.message != "":
-		ui.Text(c, list.message).FontSize(12).TextColor(mallow.Danger)
-	case len(list.names) > 0:
-		var rest []string
-		for _, name := range list.names {
-			if !slices.Contains(m.Models, name) {
-				rest = append(rest, name)
-			}
-		}
-		note := fmt.Sprintf("服务列出了 %d 个模型，点一下加进来：", len(list.names))
-		if len(rest) == 0 {
-			note = "服务列出的模型都加进来了。"
-		} else if len(rest) > listShown {
-			note = fmt.Sprintf("服务列出了 %d 个模型，这里显示前 %d 个，其余的请在上面填名字：", len(list.names), listShown)
-			rest = rest[:listShown]
-		}
-		ui.Text(c, note).FontSize(12).TextColor(mallow.Muted)
-		ui.Row(c).Gap(8).Wrap().Children(func() {
-			for _, name := range rest {
-				if mallow.Chip(c, name, false).Label("添加" + name).Clicked() {
+		list := a.models.lists[m.ID]
+		offer := func(name, note string) {
+			ui.Row(c.Key("offer:" + name)).Gap(8).MinHeight(36).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, name).Grow(1).MinWidth(0).FontSize(14).TextColor(mallow.Text).SingleLine()
+				if slices.Contains(m.Models, name) {
+					ui.Text(c, "已添加").FontSize(12).TextColor(mallow.Muted).Padding(0, 8)
+					return
+				}
+				if note != "" {
+					ui.Text(c, note).FontSize(12).TextColor(mallow.Muted)
+				}
+				if mallow.GhostIconButton(c, "添加"+name, mallow.GlyphPlus, mallow.IconButtonStyle{}).Clicked() {
 					a.addModelName(m, name)
+				}
+			})
+		}
+		// As tall whatever it holds: the dialog does not jump as the list
+		// comes in or is narrowed.
+		ui.Scroll(c).Label("可添加的模型").Height(300).Shrink(1).MinHeight(0).Gap(2).Children(func() {
+			if typed != "" && !slices.Contains(list.names, typed) {
+				offer(typed, "按这个名字添加")
+			}
+			switch {
+			case list.running:
+				ui.Text(c, "正在向服务要模型列表…").FontSize(13).TextColor(mallow.Muted).Padding(8, 0)
+			case list.message != "":
+				ui.Text(c, "没拿到模型列表："+list.message).FontSize(13).TextColor(mallow.Danger).Padding(8, 0)
+				ui.Text(c, "也可以在上面直接填模型名，按回车添加。").FontSize(13).TextColor(mallow.Muted)
+			case len(list.names) == 0:
+				ui.Text(c, "填好地址和 Key 后，这里会列出服务有的模型。现在可以在上面直接填模型名，按回车添加。").
+					FontSize(13).TextColor(mallow.Muted).Padding(8, 0)
+			default:
+				shown, more := 0, 0
+				for _, name := range list.names {
+					if !strings.Contains(strings.ToLower(name), strings.ToLower(typed)) {
+						continue
+					}
+					if shown == listShown {
+						more++
+						continue
+					}
+					shown++
+					offer(name, "")
+				}
+				switch {
+				case shown == 0:
+					ui.Text(c, "服务的列表里没有名字带这几个字的模型。").FontSize(13).TextColor(mallow.Muted).Padding(8, 0)
+				case more > 0:
+					ui.Text(c, fmt.Sprintf("还有 %d 个没显示，在上面输入关键字来找。", more)).FontSize(12).TextColor(mallow.Muted).Padding(8, 0)
 				}
 			}
 		})
-	}
+		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+			if mallow.Button(c, "刷新列表").Disabled(list.running).Clicked() {
+				a.fetchModels(m)
+			}
+			ui.Box(c).Grow(1)
+			if mallow.PrimaryButton(c, "完成").Clicked() {
+				a.models.adding = false
+			}
+		})
+	})
 }
