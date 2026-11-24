@@ -167,11 +167,11 @@ func (t *Todo) openIn(view string) int {
 // adds a task and the tasks in their groups.
 func (t *Todo) main(c *ui.Context) {
 	groups := t.withOpen(t.groups(t.ui.view, t.ui.monday))
-	ui.Column(c).Grow(1).MinWidth(0).Gap(20).Padding(24, 0, 0, 0).Children(func() {
+	view := ui.Column(c).Grow(1).MinWidth(0).Gap(20).Padding(24, 0, 0, 0)
+	view.Children(func() {
 		ui.Column(c).PaddingX(28).Children(func() { t.heading(c, groups) })
 		ui.Column(c).Grow(1).MinHeight(0).Padding(0, 0, 8, 0).Children(func() {
-			list := ui.Scroll(c).Grow(1).Padding(4, 20, 16, 20).Gap(2)
-			list.Children(func() {
+			ui.Scroll(c).Label("任务列表").Grow(1).Padding(4, 20, 16, 20).Gap(2).Children(func() {
 				for i, g := range groups {
 					t.group(c.Key(i), g)
 				}
@@ -179,21 +179,22 @@ func (t *Todo) main(c *ui.Context) {
 					ui.Text(c, t.emptyText()).Padding(20, 4).FontSize(14).TextColor(mallow.Muted)
 				}
 			})
-			// A right click where there is no task offers to add one, in
-			// the views that take new ones.
-			if t.ui.view != viewDone &&
-				mallow.ContextMenu(c, list, t.menuOpen("list"), []mallow.MenuEntry{newEntry}) == newEntry.ID {
-				t.startAdding()
-			}
 		})
 	})
+	// A right click anywhere in the view but on a task, which has its own
+	// menu, offers to add one, in the views that take new ones: the only
+	// way to, as no button does.
+	if t.ui.view != viewDone &&
+		mallow.ContextMenu(c, view, t.menuOpen("view"), []mallow.MenuEntry{newEntry}) == newEntry.ID {
+		t.startAdding()
+	}
 }
 
 func (t *Todo) emptyText() string {
 	if t.ui.view == viewDone {
 		return "还没有完成的任务。"
 	}
-	return "这里还没有任务。点右上角的 + 添加。"
+	return "这里还没有任务。点右键，选“新任务”来添加。"
 }
 
 // heading is the view's name, a line about it, and what acts on the view as
@@ -234,17 +235,8 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 			ui.Text(c, title).FontSize(28).FontWeight(600).TextColor(mallow.Text).SingleLine()
 			ui.Text(c, note).FontSize(14).TextColor(mallow.Muted)
 		})
-		// What acts on the view, the + that adds a task last: it is at
-		// the same place in every view.
-		defer func() {
-			if t.ui.view == viewDone {
-				return
-			}
-			add := mallow.IconButton(c, "添加任务", mallow.GlyphPlus, mallow.IconButtonStyle{Size: 36, Active: true})
-			if add.Clicked() {
-				t.startAdding()
-			}
-		}()
+		// What acts on the view. A task is added from the context menu
+		// of the list, not from a button here.
 		if t.ui.view == viewWeek {
 			ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
 				if mallow.IconButton(c, "上一周", mallow.GlyphChevronLeft, mallow.IconButtonStyle{Size: 36}).Clicked() {
@@ -261,7 +253,8 @@ func (t *Todo) heading(c *ui.Context, groups []group) {
 	})
 }
 
-// startAdding shows the dialog that adds a task, its draft due today, but
+// startAdding shows the dialog that adds a task, as the context menus ask
+// for it, its draft due today, but
 // in the week view in the week shown (today, if that is this week, else its
 // Monday).
 func (t *Todo) startAdding() {
@@ -393,7 +386,9 @@ func (t *Todo) group(c *ui.Context, g group) {
 			}
 		}
 		if len(g.tasks) == 0 {
-			ui.Text(c, "今天没有要做的").Padding(6, 8).FontSize(14).TextColor(mallow.Muted)
+			// The one place that says how a task is added, as no button
+			// does: it shows while there is nothing to do today.
+			ui.Text(c, "今天没有要做的。点右键，选“新任务”来添加。").Padding(6, 8).FontSize(14).TextColor(mallow.Muted)
 		}
 	})
 }

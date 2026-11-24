@@ -42,10 +42,34 @@ func click(t *testing.T, tt *ui.Tester, labels ...string) {
 	}
 }
 
-// add types a task into the adder of the view shown.
+// shown is how many of the last frame's texts are text and nothing more: an
+// element shows twice among them, as its label and as what it writes.
+// Tester.HasText finds text within longer ones too.
+func shown(tt *ui.Tester, text string) int {
+	n := 0
+	for _, s := range tt.Texts() {
+		if s == text {
+			n++
+		}
+	}
+	return n
+}
+
+// taskList is the label of the list of tasks of the view shown.
+const taskList = "任务列表"
+
+// newTask brings the dialog that adds a task, from the context menu of the
+// list of the view shown.
+func newTask(t *testing.T, tt *ui.Tester) {
+	t.Helper()
+	rightClick(t, tt, taskList)
+	click(t, tt, "新任务")
+}
+
+// add adds a task of a title in the view shown.
 func add(t *testing.T, tt *ui.Tester, title string) {
 	t.Helper()
-	click(t, tt, "添加任务")
+	newTask(t, tt)
 	tt.Type(title)
 	tt.Key(0, ui.KeyEnter)
 }
@@ -83,10 +107,19 @@ func TestTodoDetail(t *testing.T) {
 	}
 }
 
-// rightClick opens the context menu of what is labelled so.
+// rightClick opens the context menu of what is labelled so. That of the
+// list of tasks opens at the list's lower edge, under its tasks: its
+// middle may have a task, which has a menu of its own. Where the tasks
+// fill the list, that edge has one too, whose menu adds a task as well.
 func rightClick(t *testing.T, tt *ui.Tester, label string) {
 	t.Helper()
-	if err := tt.RightClick(label); err != nil {
+	if label == taskList {
+		r, ok := tt.Find(label)
+		if !ok {
+			t.Fatalf("no list of tasks (texts %q)", tt.Texts())
+		}
+		tt.RightClickAt(r.X+r.W/2, r.Y+r.H-10)
+	} else if err := tt.RightClick(label); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
@@ -126,17 +159,20 @@ func TestTodoNewFromContextMenu(t *testing.T) {
 	if ks := d.Tasks(); len(ks) != 1 || ks[0].Title != "Buy milk" || ks[0].Due != d.Today() {
 		t.Fatalf("after adding from the list's menu: %+v", ks)
 	}
-	// On a task: its menu alone, not the list's under it too.
-	rightClick(t, tt, "打开Buy milk")
-	entries := 0
-	for _, text := range tt.Texts() {
-		if text == "新任务" {
-			entries++
-		}
+	// Above the list too, by the view's heading.
+	if r, ok := tt.Find(taskList); ok {
+		tt.RightClickAt(r.X+r.W/2, r.Y-30)
+		tt.Frame()
 	}
-	// An entry shows twice among the texts: as its label, and as its text.
-	if entries != 2 {
-		t.Fatalf("新任务 shows %d times after a right click on a task, not as one entry: %q", entries, tt.Texts())
+	if n := shown(tt, "新任务"); n != 2 {
+		t.Fatalf("新任务 shows %d times after a right click by the heading, not twice as one entry does: %q", n, tt.Texts())
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	// On a task: its menu alone, not the view's under it too.
+	rightClick(t, tt, "打开Buy milk")
+	if n := shown(tt, "新任务"); n != 2 {
+		t.Fatalf("新任务 shows %d times after a right click on a task, not twice as one entry does: %q", n, tt.Texts())
 	}
 	click(t, tt, "新任务")
 	if !tt.HasText("任务标题") {
@@ -156,14 +192,14 @@ func TestTodoNewFromContextMenu(t *testing.T) {
 
 	click(t, tt, "完成Buy milk", "已完成")
 	rightClick(t, tt, "打开Buy milk")
-	if !tt.HasText("标为未完成") || tt.HasText("新任务") {
+	if !tt.HasText("标为未完成") || shown(tt, "新任务") != 0 {
 		t.Errorf("the menu of a task done: %q", tt.Texts())
 	}
 	tt.Key(0, ui.KeyEscape)
 	tt.Frame()
 	tt.RightClickAt(800, 600)
 	tt.Frame()
-	if tt.HasText("新任务") {
+	if shown(tt, "新任务") != 0 {
 		t.Errorf("a right click among the tasks done offers to add one: %q", tt.Texts())
 	}
 }
@@ -187,9 +223,22 @@ func TestTodoNoListsOrPriority(t *testing.T) {
 // it adds nothing, and starts blank the next time.
 func TestTodoAddDialog(t *testing.T) {
 	d, tt := newTodoTester(t)
-	click(t, tt, "添加任务")
-	if !tt.HasText("新任务") {
-		t.Fatalf("no dialog after 添加任务: %q", tt.Texts())
+	// No button adds a task: the context menus do, and the page says so
+	// where it has no task to show.
+	if tt.HasText("添加任务") {
+		t.Fatalf("the page has a button that adds a task: %q", tt.Texts())
+	}
+	if !tt.HasText("今天没有要做的。点右键，选“新任务”来添加。") {
+		t.Errorf("a day without tasks does not say how one is added: %q", tt.Texts())
+	}
+	click(t, tt, "按周", "下一周")
+	if !tt.HasText("这里还没有任务。点右键，选“新任务”来添加。") {
+		t.Errorf("a week without tasks does not say how one is added: %q", tt.Texts())
+	}
+	click(t, tt, "今天")
+	newTask(t, tt)
+	if !tt.HasText("任务标题") {
+		t.Fatalf("no dialog after 新任务: %q", tt.Texts())
 	}
 	// The keyboard is in the title as the dialog shows.
 	tt.Type("Check upstream")
@@ -198,16 +247,17 @@ func TestTodoAddDialog(t *testing.T) {
 	if len(ks) != 1 || ks[0].Title != "Check upstream" || ks[0].Repeat != todo.RepeatWeekly || ks[0].Due <= d.Today() {
 		t.Fatalf("after adding a weekly task for tomorrow: %+v", ks)
 	}
-	if tt.HasText("新任务") {
+	if tt.HasText("任务标题") {
 		t.Fatalf("the dialog still shows after adding")
 	}
 
 	// Without a title nothing is added, by the button or by Enter, and the
 	// dialog stays.
-	click(t, tt, "添加任务", "添加")
+	newTask(t, tt)
+	click(t, tt, "添加")
 	tt.Key(0, ui.KeyEnter)
 	tt.Frame()
-	if len(d.Tasks()) != 1 || !tt.HasText("新任务") {
+	if len(d.Tasks()) != 1 || !tt.HasText("任务标题") {
 		t.Fatalf("after 添加 without a title: %d tasks, %q", len(d.Tasks()), tt.Texts())
 	}
 	click(t, tt, "取消")
@@ -217,15 +267,15 @@ func TestTodoAddDialog(t *testing.T) {
 		"Escape":          func() { tt.Key(0, ui.KeyEscape) },
 		"a click outside": func() { tt.ClickAt(8, 400) },
 	} {
-		click(t, tt, "添加任务")
+		newTask(t, tt)
 		tt.Type("Nope")
 		leave()
 		tt.Frame()
-		if len(d.Tasks()) != 1 || tt.HasText("新任务") {
+		if len(d.Tasks()) != 1 || tt.HasText("任务标题") {
 			t.Fatalf("after leaving the dialog by %s: %d tasks, %q", name, len(d.Tasks()), tt.Texts())
 		}
 		// What was written is not there the next time.
-		click(t, tt, "添加任务")
+		newTask(t, tt)
 		if tt.HasText("Nope") {
 			t.Fatalf("the dialog left by %s shows what was written again", name)
 		}
@@ -238,7 +288,7 @@ func TestTodoAddDialog(t *testing.T) {
 	if far.Month() != day.Month() {
 		far = day.AddDate(0, 0, -3)
 	}
-	click(t, tt, "添加任务")
+	newTask(t, tt)
 	tt.Type("Buy milk")
 	click(t, tt, "其他日期", fmt.Sprintf("%d月%d日", int(far.Month()), far.Day()), "添加")
 	if ks := d.Tasks(); len(ks) != 2 || ks[1].Title != "Buy milk" || ks[1].Due != far.Format("2006-01-02") {
@@ -253,7 +303,7 @@ func TestTodoAddDialogInLowWindow(t *testing.T) {
 	a.settings.Size = "xlarge"
 	tt := ui.NewTester(a.view, 860, 520)
 	d := a.current().(*todo.Todo)
-	click(t, tt, "添加任务")
+	newTask(t, tt)
 	tt.Type("Buy milk")
 	click(t, tt, "其他日期")
 	tt.Frame()
@@ -387,7 +437,9 @@ func TestTodoFold(t *testing.T) {
 //	ATELIER_SCREENSHOT=shot.png go test -run Screenshot
 //
 // ATELIER_SCREENSHOT_CLICK lists what to click first, separated by commas,
-// as "按周" for the week view or "打开写周报" for a task's details.
+// as "按周" for the week view or "打开写周报" for a task's details; "右键:"
+// before one clicks it with the secondary button, as "右键:任务列表,新任务"
+// for the dialog that adds a task.
 func TestScreenshot(t *testing.T) {
 	path := os.Getenv("ATELIER_SCREENSHOT")
 	if path == "" {
@@ -427,7 +479,13 @@ func TestScreenshot(t *testing.T) {
 		tt.SetScale(2)
 	}
 	if s := os.Getenv("ATELIER_SCREENSHOT_CLICK"); s != "" {
-		click(t, tt, strings.Split(s, ",")...)
+		for _, label := range strings.Split(s, ",") {
+			if target, ok := strings.CutPrefix(label, "右键:"); ok {
+				rightClick(t, tt, target)
+			} else {
+				click(t, tt, label)
+			}
+		}
 	}
 	tt.Move(5, 400)
 	// ATELIER_SCREENSHOT_RIGHTCLICK opens the context menu of a label.
@@ -583,7 +641,9 @@ func TestFontsKeepLayout(t *testing.T) {
 	// The dialog that adds a task, its calendar open.
 	a.settings.Size, a.settings.Font = "", ""
 	st.Frame()
-	click(t, st, "待办", "添加任务", "其他日期")
+	click(t, st, "待办")
+	newTask(t, st)
+	click(t, st, "其他日期")
 	st.Advance(time.Second)
 	for _, s := range sizes {
 		fonts += steady(t, a, s.id, "新任务", func() map[string]place { return places(st) })
