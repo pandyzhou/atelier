@@ -66,12 +66,14 @@ func TestTidy(t *testing.T) {
 		"<p align=\"center\">\n    <a href=\"https://example.com/ci\"><img src='https://img.example.com/ci.svg' alt=\"CI\"></a>\n    <a href=\"docs/guide.md\">Read the <b>guide</b></a>\n</p>\n\n" +
 		"Use `Map<K, V>` and <kbd>Ctrl</kbd>, not <span style=\"color:red\">this</span>.\n\n" +
 		"```html\n<p align=\"center\"><img src=\"x.png\"></p>\n```\n\n" +
-		"<details><summary>More</summary>\n\n- one\n\n</details>\n"
+		"<details><summary>More</summary>\n\n- one\n\n</details>\n\n" +
+		"<p align=\"center\">\n  <img src=\"a.svg\" height=\"28\" />&nbsp;&nbsp;\n  <picture>\n    <source media=\"(prefers-color-scheme: dark)\" srcset=\"b-dark.svg\" />\n    <img src=\"b.svg\" height=\"28\" />\n  </picture>&nbsp;&nbsp;\n  <img src=\"c.png\" height=\"28\" />\n</p>\n"
 	want := "# ![Logo](docs/logo%20dark.png#shown-at=120x0) Tiny\n\n" +
 		"[![CI](https://img.example.com/ci.svg)](https://example.com/ci)\n[Read the **guide**](docs/guide.md)\n\n" +
 		"Use `Map<K, V>` and `Ctrl`, not this.\n\n" +
 		"```html\n<p align=\"center\"><img src=\"x.png\"></p>\n```\n\n" +
-		"More\n\n- one"
+		"More\n\n- one\n\n" +
+		"  ![](a.svg#shown-at=0x28)&nbsp;&nbsp;\n![](b.svg#shown-at=0x28)\n  &nbsp;&nbsp;\n  ![](c.png#shown-at=0x28)"
 	if got := Tidy(src); got != want {
 		t.Errorf("tidied to:\n%s\n\nwant:\n%s", got, want)
 	}
@@ -95,6 +97,19 @@ func TestAddresses(t *testing.T) {
 		}
 		if got := resolve("https://github.com/", "o/r/blob/HEAD", c.file, c.address); got != c.link {
 			t.Errorf("the link %q of %s goes to %q", c.address, c.file, got)
+		}
+	}
+}
+
+// TestResized checks that an SVG is told another size without what it
+// draws changing: its viewBox stays, or is made of the size it had.
+func TestResized(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{`<svg xmlns="x" width="100" height='50'><path d="M0 0"/></svg>`, `<svg xmlns="x" width="56" height="28" viewBox="0 0 100 50"><path d="M0 0"/></svg>`},
+		{`<?xml version="1.0"?><svg viewBox="0 0 24 24" width=24 height=24 fill="none"><g/></svg>`, `<?xml version="1.0"?><svg viewBox="0 0 24 24" fill="none" width="56" height="28"><g/></svg>`},
+	} {
+		if got := string(resized([]byte(c.in), 100, 50, 56, 28)); got != c.want {
+			t.Errorf("resized to %s", got)
 		}
 	}
 }

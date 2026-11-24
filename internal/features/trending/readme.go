@@ -177,15 +177,47 @@ func (t *Trending) loadPicture(name, file, address string) (ui.ImageSource, erro
 	case height == 0:
 		height = max(1, int(h*float32(width)/w))
 	}
-	switch src := src.(type) {
+	switch src.(type) {
 	case *ui.SVG:
-		return ui.NewBitmap(src.Image(width, height, nil)), nil
+		// A drawing is as sharp at any size: it is told its own.
+		if sized, err := ui.ParseSVG(resized(data, w, h, width, height)); err == nil {
+			return sized, nil
+		}
 	case *ui.Bitmap:
-		if float32(width) < w {
+		// A small one, as an icon in a row of them, is made that small.
+		// A large one shows as it is, at most as wide as the page: made
+		// smaller here it would show blurred where the screen has more
+		// pixels than the page counts.
+		if float32(width) < w && max(width, height) <= smallPicture {
 			return ui.DecodeBitmapScaled(data, max(width, height))
 		}
 	}
 	return src, nil
+}
+
+// smallPicture is the longest side, in DIPs, of the pictures that are made
+// as small as their README says.
+const smallPicture = 160
+
+// root is the tag an SVG begins with.
+var root = regexp.MustCompile(`(?is)<svg\b[^>]*>`)
+
+// resized returns an SVG that says it is width by height, of one that says
+// it is w by h: what it draws is the same, in the room of the new size.
+func resized(data []byte, w, h float32, width, height int) []byte {
+	return root.ReplaceAllFunc(data, func(tag []byte) []byte {
+		t := string(tag)
+		box := ""
+		if attribute(t, "viewBox") == "" {
+			box = fmt.Sprintf(` viewBox="0 0 %g %g"`, w, h)
+		}
+		t = regexp.MustCompile(`(?is)\s(width|height)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`).ReplaceAllString(t, "")
+		end := ">"
+		if strings.HasSuffix(t, "/>") {
+			end = "/>"
+		}
+		return []byte(strings.TrimSuffix(t, end) + fmt.Sprintf(` width="%d" height="%d"`, width, height) + box + end)
+	})
 }
 
 // What Tidy reads of the HTML that READMEs are written with.
@@ -204,6 +236,8 @@ var (
 	parted   = regexp.MustCompile(`(?i)</?(p|div|center|details|summary|section|article|header|footer|table|thead|tbody|tr|ul|ol|blockquote|figure|figcaption)\b[^>]*>`)
 	dropped  = regexp.MustCompile(`(?i)</?(span|picture|font|sub|sup|small|big|u|ins|del|s|strike|source|td|th|li|nav|main|a|video|audio|iframe|hr|wbr|abbr|mark|label|svg|path|g)\b[^>]*>`)
 	blank    = regexp.MustCompile(`\n{3,}`)
+	// alone is a tag that goes without a trace, on a line of its own.
+	alone = regexp.MustCompile(`(?im)^[ \t]*</?(span|picture|font|sub|sup|small|big|source|nav|main|svg|path|g)\b[^>\n]*>[ \t]*\n`)
 )
 
 // sized is what follows a picture's address when its README says how
@@ -266,6 +300,9 @@ func Tidy(src string) string {
 // tidy is Tidy for text that holds no code.
 func tidy(s string) string {
 	s = comment.ReplaceAllString(s, "")
+	// A line that only held such a tag would be left empty, and part the
+	// paragraph around it in two.
+	s = alone.ReplaceAllString(s, "")
 	s = image.ReplaceAllStringFunc(s, func(tag string) string {
 		src := attribute(tag, "src")
 		if src == "" {
