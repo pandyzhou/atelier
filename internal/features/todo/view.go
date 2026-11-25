@@ -401,8 +401,8 @@ func (t *Todo) group(c *ui.Context, g group) {
 				if g.accent {
 					title.TextColor(mallow.Accent)
 				}
-				if len(g.tasks) > 0 {
-					ui.Text(c, strconv.Itoa(len(g.tasks))).FontSize(12).TextColor(mallow.Muted)
+				if n := len(g.tasks) + len(g.coming); n > 0 {
+					ui.Text(c, strconv.Itoa(n)).FontSize(12).TextColor(mallow.Muted)
 				}
 				// A groove runs on from the heading to the far end, and
 				// sets the group apart from the one above.
@@ -428,8 +428,34 @@ func (t *Todo) group(c *ui.Context, g group) {
 				t.row(c.Key(k.ID), k, g.dated)
 			}
 		}
-		if len(g.tasks) == 0 {
+		for _, k := range g.coming {
+			t.comingRow(c.Key("coming:"+strconv.Itoa(k.ID)), k)
+		}
+		if len(g.tasks) == 0 && len(g.coming) == 0 {
 			ui.Text(c, "今天没有要做的").Padding(6, 8).FontSize(14).TextColor(mallow.Muted)
+		}
+	})
+}
+
+// comingLabel names a repeating task where it will come back, apart from
+// the task itself, which may show in the same view.
+func comingLabel(k *Task) string { return "以后的" + k.Title }
+
+// comingRow is a repeating task on a day it will come back on: a row as the
+// task's, dim, with the mark of a repeat where the check will be, as it is
+// not to be done yet. It opens the task, to change what repeats.
+func (t *Todo) comingRow(c *ui.Context, k *Task) {
+	mallow.ListRow(c, false).Children(func() {
+		// As wide as a check, so that the titles stand in a line.
+		ui.Box(c).Size(26, 26).Shrink(0).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
+			mallow.GlyphRepeat(c, mallow.Muted.Alpha(0.7))
+		})
+		body := mallow.Plain(c, comingLabel(k)).Grow(1).MinWidth(0).Padding(7, 4).Gap(8)
+		body.Children(func() {
+			ui.Text(c, k.Title).Grow(1).MinWidth(0).FontSize(14).TextColor(mallow.Muted)
+		})
+		if body.Clicked() {
+			t.openTask(k.ID)
 		}
 	})
 }

@@ -658,9 +658,9 @@ var tools = []llm.Tool{
 		Description: "添加一条待办任务。",
 		Parameters: schema([]string{"title"}, map[string]any{
 			"title":  prop("string", "任务标题"),
-			"due":    prop("string", "到期日期，YYYY-MM-DD；没有日期就不填"),
+			"due":    prop("string", "到期日期，YYYY-MM-DD；没有日期就不填。重复的任务填第一期的日期，不填就从今天算起"),
 			"note":   prop("string", "备注，可不填"),
-			"repeat": map[string]any{"type": "string", "enum": []string{"daily", "weekly", "monthly"}, "description": "重复：每天、每周或每月；不重复就不填"},
+			"repeat": map[string]any{"type": "string", "enum": []string{"daily", "weekly", "monthly"}, "description": "重复：每天、每周（每周的同一个星期几）或每月（每月的同一号）；不重复就不填"},
 		}),
 	},
 	{
@@ -744,7 +744,7 @@ var tools = []llm.Tool{
 	},
 	{
 		Name:        "list_tasks",
-		Description: "按到期日期查询任务，包括已完成的。提示里已经列出未完成的任务，只有要查已完成的或核对时才需要用。",
+		Description: "按到期日期查询任务，包括已完成的；重复的任务在这段日子里以后还会出现的几期也一并列出。提示里已经列出未完成的任务，只有要查已完成的、查以后的日子有什么或核对时才需要用。",
 		Parameters: schema([]string{"from", "to"}, map[string]any{
 			"from": prop("string", "起始日期，YYYY-MM-DD"),
 			"to":   prop("string", "结束日期（含），YYYY-MM-DD"),
@@ -786,12 +786,18 @@ func (h *Home) call(c llm.Call) string {
 		if k == nil {
 			return "没有添加：标题是空的"
 		}
-		note := "已添加任务：" + k.Title
+		note, result := "已添加任务："+k.Title, fmt.Sprintf("已添加，id %d，到期 %s", k.ID, orNone(k.Due))
 		if k.Due != "" {
 			note += " · " + h.dayOf(k.Due)
+			result += " " + weekday(k.Due)
+		}
+		// When it comes back is said too: the day was not always asked for.
+		if every := cadence(k); every != "" {
+			note += " · " + every + "重复"
+			result += "，以后" + every + "重复"
 		}
 		did(note)
-		return fmt.Sprintf("已添加，id %d，到期 %s", k.ID, orNone(k.Due))
+		return result
 	case "update_task":
 		var in struct {
 			ID                       int
@@ -844,7 +850,13 @@ func (h *Home) call(c llm.Call) string {
 		if len(changes) > 0 {
 			h.tasks.Changed(k)
 		}
+		result := "已修改，现在是："
 		if in.Done != nil && *in.Done != k.Done {
+			// Checked off, a repeating task is not done: it is the next
+			// time's, and a copy of it is.
+			if *in.Done && k.Repeat != todo.RepeatNone {
+				result = "已修改：这一期记为完成，任务挪到了下一期，现在是："
+			}
 			h.tasks.SetDone(k, *in.Done)
 			if *in.Done {
 				changes = append(changes, "标为完成")
@@ -856,7 +868,7 @@ func (h *Home) call(c llm.Call) string {
 			return "没有要改的：任务已经是这样了"
 		}
 		did("已修改任务：" + was + " · " + strings.Join(changes, "，"))
-		return "已修改，现在是：" + h.taskLine(k)
+		return result + h.taskLine(k)
 	case "delete_task":
 		var in struct{ ID int }
 		if err := json.Unmarshal(c.Input, &in); err != nil {
@@ -1072,6 +1084,13 @@ func (h *Home) call(c llm.Call) string {
 		if err := json.Unmarshal(c.Input, &in); err != nil {
 			return "参数不对：" + err.Error()
 		}
+		from, err := time.Parse(dateLayout, in.From)
+		if _, bad := time.Parse(dateLayout, in.To); err != nil || bad != nil {
+			return "from 和 to 要写成 YYYY-MM-DD"
+		}
+		if in.To < in.From {
+			return "to 不能早于 from"
+		}
 		var b strings.Builder
 		for _, k := range h.tasks.Tasks() {
 			if k.Due == "" || k.Due < in.From || k.Due > in.To {
@@ -1079,12 +1098,72 @@ func (h *Home) call(c llm.Call) string {
 			}
 			b.WriteString(h.taskLine(k))
 		}
+		b.WriteString(h.comingLines(in.From, min(in.To, from.AddDate(0, 0, comingDays).Format(dateLayout))))
 		if b.Len() == 0 {
 			return "这段时间没有任务"
 		}
 		return b.String()
 	}
 	return "没有这个工具：" + c.Name
+}
+
+const (
+	// comingDays is how far ahead of the first day asked of the model is
+	// told of the repeating tasks to come, and comingDates how many of the
+	// days one of them comes back on.
+	comingDays  = 366
+	comingDates = 12
+)
+
+// comingLines writes for the model the repeating tasks that will come back
+// from from to to, a line each with the days: they are no tasks of their
+// own, and not to be done yet. It is "" when none will.
+func (h *Home) comingLines(from, to string) string {
+	var order []*todo.Task
+	days := map[*todo.Task][]string{}
+	for _, o := range h.tasks.Coming(from, to) {
+		if days[o.Task] == nil {
+			order = append(order, o.Task)
+		}
+		days[o.Task] = append(days[o.Task], o.Date)
+	}
+	if len(order) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n重复的任务在这段日子里还会再出现（是同一条任务以后的几期，id 不变；还没到，不用也不能标为完成）：\n")
+	for _, k := range order {
+		on := days[k]
+		fmt.Fprintf(&b, "[%d] %s（%s）：", k.ID, k.Title, cadence(k))
+		switch {
+		case k.Repeat == todo.RepeatDaily && len(on) > 1:
+			b.WriteString(on[0] + " 到 " + on[len(on)-1] + " 每天")
+		case len(on) > comingDates:
+			b.WriteString(strings.Join(on[:comingDates], "、") + " 等")
+		default:
+			b.WriteString(strings.Join(on, "、"))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// cadence says when a repeating task comes back, by the day it is due: 每天,
+// 每周三, 每月 25 日. It is "" for a task that does not repeat.
+func cadence(k *todo.Task) string {
+	d, err := time.Parse(dateLayout, k.Due)
+	if err != nil {
+		return ""
+	}
+	switch k.Repeat {
+	case todo.RepeatDaily:
+		return "每天"
+	case todo.RepeatWeekly:
+		return "每" + weekday(k.Due)
+	case todo.RepeatMonthly:
+		return fmt.Sprintf("每月 %d 日", d.Day())
+	}
+	return ""
 }
 
 func orNone(s string) string {
@@ -1209,6 +1288,10 @@ func (h *Home) system() string {
 - 添加前信息不全（比如课程没说星期几、第几节）就先问清楚，不要猜。
 - 添加成功后用一句话确认。工具说失败时，把原因告诉用户。
 - 任务可以修改、标为完成和删除，课程可以修改和删除，用前面方括号里的 id 指明是哪一条；回答用户时不要提 id。
+- 重复的任务只有一条，日期是当前这一期的。标为完成后，留下一条已完成的记录，任务本身挪到下一期：每天的是第二天，每周的是下周的同一个星期几，每月的是下个月的同一号。这一期没做也不会卡住：到了新的一天、新的一周（周一起算）、新的一个月，它自动换成那一期的，之前没做的不保留。待办页的“最近 7 天”“按周”和月历会把以后各期提前显示出来，颜色淡一些，到那一期之前不能勾；要查以后哪天有，用 list_tasks。
+- 添加重复的任务时，用户没说从哪天起就从今天算起，确认时说清楚是每周几或每月几号。
+- “第几周”按周一到周日为一周来算，和待办页“按周”的标题一致；<context> 里写着今天是第几周。
+- 用户问应用为什么这样显示、某个功能怎么运作时，按这里写的和工具查到的回答；这里没写的就直说不清楚，不要猜，更不要为了验证去改用户的数据（比如把没做的任务标为完成再改回来）。没做的事不要建议标为完成。
 - 删除不能恢复：只在用户明确说要删时才删，指不清是哪一条时先问清楚。每次删除前应用都会让用户点确认，所以指明了是哪一条就直接调用，不用自己再问一遍“确定吗”；工具说用户没有同意时，就不要再删。
 - 用户附上图片或文件时，按里面的内容回答。要据此添加好几条任务或课程时，先把读到的列出来让用户确认，再添加。
 - 用户的每条消息前面有一段 <context>：当时的时间，以及课表和任务的清单，清单和上一次相同时省略。以最新的一份为准；你用工具做过的改动，以工具回的结果为准。
@@ -1225,7 +1308,9 @@ func (h *Home) context() string {
 	now := h.now()
 	data := h.listing()
 	var b strings.Builder
-	fmt.Fprintf(&b, "<context>\n现在是 %s %s %s。\n", now.Format(dateLayout), dayNames[(int(now.Weekday())+6)%7], now.Format("15:04"))
+	// The week's number too, as the to-do list's week view is titled by it.
+	_, week := now.ISOWeek()
+	fmt.Fprintf(&b, "<context>\n现在是 %s %s %s，第 %d 周。\n", now.Format(dateLayout), dayNames[(int(now.Weekday())+6)%7], now.Format("15:04"), week)
 	if data == h.ui.listed {
 		b.WriteString("课表和任务和上一条消息时一样。\n")
 	} else {

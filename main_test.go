@@ -272,11 +272,18 @@ func TestTodoMonthView(t *testing.T) {
 		t.Fatalf("after adding on a day of the month: %+v", ks)
 	}
 
-	// Another month has neither, and 本月 comes back.
+	// Another month has neither to do; the one that repeats shows on the
+	// days it will come back on, where it opens too. 本月 comes back.
 	click(t, tt, "下一月", "下一月")
-	if tt.HasText("Buy milk") || tt.HasText("Buy bread") {
-		t.Errorf("two months on, the tasks of this one show: %q", tt.Texts())
+	if tt.HasText("打开Buy milk") || tt.HasText("Buy bread") || !tt.HasText("以后的Buy milk") {
+		t.Errorf("two months on: %q", tt.Texts())
 	}
+	click(t, tt, "以后的Buy milk")
+	if !tt.HasText("任务标题") {
+		t.Errorf("a task does not open from a day it will come back on: %q", tt.Texts())
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
 	click(t, tt, "本月")
 	if !tt.HasText("Buy milk") || !tt.HasText("Buy bread") {
 		t.Errorf("back in this month: %q", tt.Texts())
@@ -506,6 +513,47 @@ func TestTodoWeekView(t *testing.T) {
 	day, err := time.Parse("2006-01-02", d.Tasks()[1].Due)
 	if err != nil || day.Weekday() != time.Monday || d.Tasks()[1].Due <= d.Today() {
 		t.Fatalf("task added in next week: %+v", d.Tasks()[1])
+	}
+}
+
+// A task that repeats shows in the weeks ahead, on the day it will come back
+// on: without a check, as it is not to be done yet, and not counted as to
+// do. It opens the task from there; checked off, the task is next week's.
+func TestTodoRepeatAhead(t *testing.T) {
+	d, tt := newTodoTester(t)
+	add(t, tt, "Check upstream")
+	k := d.Tasks()[0]
+	rightClick(t, tt, "打开Check upstream")
+	click(t, tt, "设为每周重复", "按周")
+	if shown(tt, "完成Check upstream") != 1 || tt.HasText("以后的Check upstream") {
+		t.Fatalf("this week: %q", tt.Texts())
+	}
+	click(t, tt, "下一周")
+	if shown(tt, "完成Check upstream") != 0 || shown(tt, "以后的Check upstream") != 1 || !tt.HasText("没有未完成的任务") {
+		t.Fatalf("next week: %q", tt.Texts())
+	}
+	// Opened from there it is over the list, as it is not of this week.
+	click(t, tt, "以后的Check upstream")
+	if !tt.HasText("正在编辑") || !tt.HasText("任务标题") {
+		t.Fatalf("after opening the task from next week: %q", tt.Texts())
+	}
+	today, _ := time.Parse("2006-01-02", d.Today())
+	click(t, tt, "完成这项任务")
+	if want := today.AddDate(0, 0, 7).Format("2006-01-02"); k.Done || k.Due != want || len(d.Tasks()) != 2 {
+		t.Fatalf("checked off, the task is due %s, done %v, of %d tasks; want %s", k.Due, k.Done, len(d.Tasks()), want)
+	}
+	click(t, tt, "关闭详情")
+	if tt.HasText("正在编辑") || shown(tt, "完成Check upstream") != 1 || tt.HasText("以后的Check upstream") {
+		t.Fatalf("next week, with the task now of it: %q", tt.Texts())
+	}
+	click(t, tt, "下一周")
+	if shown(tt, "完成Check upstream") != 0 || shown(tt, "以后的Check upstream") != 1 {
+		t.Errorf("the week after: %q", tt.Texts())
+	}
+	// The week it was done in keeps the copy that is done.
+	click(t, tt, "本周")
+	if shown(tt, "完成Check upstream") != 1 || tt.HasText("以后的Check upstream") || !tt.HasText("没有未完成的任务") {
+		t.Errorf("back in this week: %q", tt.Texts())
 	}
 }
 
@@ -2384,6 +2432,104 @@ func TestTrending(t *testing.T) {
 // GitHub when what is at hand is none or old, off the UI's thread, with a
 // line in the conversation of what it read; and that a reading stopped in
 // the middle leaves the conversation one that can go on.
+// The assistant is told how a task that repeats comes back: in its rules,
+// when it adds one, where it looks at the days ahead, and when it checks
+// one off, which leaves the task to do.
+func TestAssistantRepeats(t *testing.T) {
+	a := newApp(store.Open(t.TempDir()))
+	a.win = &fakeWindow{}
+	key, err := a.box.Seal("k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.settings.Models = []modelConfig{{ID: 1, Name: "P", Kind: string(llm.Chat), Key: key, Models: []string{"m"}}}
+	a.settings.Model, a.settings.ModelName = 1, "m"
+	var tasks *todo.Todo
+	for _, f := range a.features {
+		if f, ok := f.(*todo.Todo); ok {
+			tasks = f
+		}
+	}
+	today, _ := time.Parse("2006-01-02", tasks.Today())
+	day := func(n int) string { return today.AddDate(0, 0, n).Format("2006-01-02") }
+	weekday := [7]string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}[today.Weekday()]
+	call := func(id, name, input string) llm.Call {
+		return llm.Call{ID: id, Name: name, Input: json.RawMessage(input)}
+	}
+	answers := []llm.Message{
+		{Role: llm.Assistant, Calls: []llm.Call{call("c1", "add_task", `{"title":"同步上游","repeat":"weekly"}`)}},
+		{Role: llm.Assistant, Text: "加好了。"},
+		{Role: llm.Assistant, Calls: []llm.Call{
+			call("c2", "list_tasks", `{"from":"`+day(1)+`","to":"`+day(14)+`"}`),
+			call("c3", "list_tasks", `{"from":"下周","to":"`+day(14)+`"}`),
+			call("c4", "list_tasks", `{"from":"`+day(-7)+`","to":"`+day(-1)+`"}`),
+			call("c5", "update_task", `{"id":1,"done":true}`),
+		}},
+		{Role: llm.Assistant, Text: "好。"},
+	}
+	var asked []llm.Request
+	a.complete = func(_ context.Context, _ llm.Config, r llm.Request, _ func(string)) (llm.Message, error) {
+		asked = append(asked, r)
+		return answers[len(asked)-1], nil
+	}
+	tt := ui.NewTester(a.view, 1280, 800)
+	say := func(text string) {
+		t.Helper()
+		click(t, tt, "给助手的话")
+		tt.Type(text)
+		tt.Key(0, ui.KeyEnter)
+		tt.Frame()
+	}
+	say("每周加一个任务：同步上游")
+	if len(asked) != 2 {
+		t.Fatalf("asked %d times", len(asked))
+	}
+	// It knows how the app has a repeating task come back, and the week.
+	_, week := time.Now().ISOWeek()
+	if sys := asked[0].System; !strings.Contains(sys, "重复的任务只有一条") || !strings.Contains(sys, "不要猜") {
+		t.Errorf("the rules say nothing of tasks that repeat: %s", sys)
+	}
+	if at := asked[0].Messages[0].Context; !strings.Contains(at, fmt.Sprintf("，第 %d 周。", week)) {
+		t.Errorf("the model is not told the week: %s", at)
+	}
+	// Added without a day, it is due today, and the model is told when it
+	// comes back; so is the user.
+	got := asked[1].Messages
+	if text := got[len(got)-1].Text; text != "已添加，id 1，到期 "+day(0)+" "+weekday+"，以后每"+weekday+"重复" {
+		t.Errorf("after adding, the model is told %q", text)
+	}
+	if !tt.HasText("已添加任务：同步上游 · 今天 · 每" + weekday + "重复") {
+		t.Errorf("the conversation shows %q", tt.Texts())
+	}
+
+	say("后面两周有什么")
+	if len(asked) != 4 {
+		t.Fatalf("asked %d times", len(asked))
+	}
+	got = asked[3].Messages
+	results := got[len(got)-4:]
+	// The days ahead have the task as it will come back, which is said to
+	// be no task of its own; days that are none are refused; days gone by
+	// have nothing.
+	if text := results[0].Text; !strings.Contains(text, "[1] 同步上游（每"+weekday+"）："+day(7)+"、"+day(14)+"\n") ||
+		!strings.Contains(text, "不能标为完成") || strings.Contains(text, day(0)) {
+		t.Errorf("of the two weeks ahead the model is told %q", text)
+	}
+	if text := results[1].Text; text != "from 和 to 要写成 YYYY-MM-DD" {
+		t.Errorf("of days that are none the model is told %q", text)
+	}
+	if text := results[2].Text; text != "这段时间没有任务" {
+		t.Errorf("of the week before the model is told %q", text)
+	}
+	// Checked off, the task is next week's, and the model is told so.
+	if text := results[3].Text; !strings.Contains(text, "这一期记为完成") || !strings.Contains(text, "[1] "+day(7)) {
+		t.Errorf("after checking off, the model is told %q", text)
+	}
+	if ks := tasks.Tasks(); len(ks) != 2 || ks[0].Done || ks[0].Due != day(7) || !ks[1].Done || ks[1].Due != day(0) {
+		t.Errorf("the tasks after checking off: %+v, %+v", ks[0], ks[1])
+	}
+}
+
 func TestAssistantReadsTrending(t *testing.T) {
 	const page = `<article class="Box-row"><h2 class="h3"><a href="/acme/rocket"><span>acme /</span> rocket</a></h2>
 <p class="col-9">Rockets for agents</p><span itemprop="programmingLanguage">Go</span>

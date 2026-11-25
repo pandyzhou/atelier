@@ -36,7 +36,8 @@ type Task struct {
 	Priority int    `json:"priority,omitempty"`
 	Due      string `json:"due,omitempty"` // a date, "" for none
 	// Repeat makes the task come back: checked off, it leaves a done copy
-	// and moves its Due to the next time. A repeating task has a Due.
+	// and moves its Due to the next time. A repeating task has a Due, which
+	// while it is to do is never of a time gone by: see current.
 	Repeat string `json:"repeat,omitempty"`
 	Done   bool   `json:"done,omitempty"`
 	DoneAt string `json:"doneAt,omitempty"` // the date it was checked off
@@ -63,6 +64,8 @@ type Todo struct {
 	data  data
 	now   func() time.Time
 	ui    viewState
+	// rolled is the day the repeating tasks were last moved on: see roll.
+	rolled string
 }
 
 // New loads the saved tasks from s, taking over the weekly checklist's on
@@ -90,10 +93,14 @@ func (t *Todo) Title() string { return "待办" }
 func (t *Todo) Today() string { return t.now().Format(dateLayout) }
 
 // Tasks returns every task.
-func (t *Todo) Tasks() []*Task { return t.data.Tasks }
+func (t *Todo) Tasks() []*Task {
+	t.roll()
+	return t.data.Tasks
+}
 
 // Task returns the task of an ID, nil if there is none.
 func (t *Todo) Task(id int) *Task {
+	t.roll()
 	for _, k := range t.data.Tasks {
 		if k.ID == id {
 			return k
@@ -117,10 +124,41 @@ func (t *Todo) Add(k Task) *Task {
 	return &k
 }
 
-// settle keeps what must hold of a task: one that repeats has a due date.
+// settle keeps what must hold of a task: one that repeats has a due date,
+// and while it is to do, one of the time it is in now, or later.
 func (t *Todo) settle(k *Task) {
-	if k.Repeat != RepeatNone && k.Due == "" {
-		k.Due = t.Today()
+	if k.Repeat == RepeatNone {
+		return
+	}
+	today := t.Today()
+	if k.Due == "" {
+		k.Due = today
+	}
+	if !k.Done {
+		k.Due = current(k.Due, k.Repeat, today)
+	}
+}
+
+// roll moves the repeating tasks left undone on to the time they are of
+// now (current), once a day: before the tasks are read, as the app may
+// have stayed open overnight.
+func (t *Todo) roll() {
+	today := t.Today()
+	if t.rolled == today {
+		return
+	}
+	t.rolled = today
+	moved := false
+	for _, k := range t.data.Tasks {
+		if k.Done || k.Repeat == RepeatNone {
+			continue
+		}
+		if due := current(k.Due, k.Repeat, today); due != k.Due {
+			k.Due, moved = due, true
+		}
+	}
+	if moved {
+		t.save()
 	}
 }
 
@@ -136,6 +174,7 @@ func (t *Todo) Changed(k *Task) {
 // SetDone checks a task off, or not. Checking off a repeating task leaves a
 // done copy of it and moves the task to its next time.
 func (t *Todo) SetDone(k *Task, done bool) {
+	t.roll()
 	today := t.Today()
 	switch {
 	case done && k.Repeat != RepeatNone:
@@ -155,23 +194,117 @@ func (t *Todo) SetDone(k *Task, done bool) {
 // nextDue is when a task due on due comes back: one step on, and further
 // while that is still before today.
 func nextDue(due, repeat, today string) string {
-	d, err := time.Parse(dateLayout, due)
-	if err != nil {
-		d, _ = time.Parse(dateLayout, today)
+	if _, err := time.Parse(dateLayout, due); err != nil {
+		due = today
 	}
 	for {
-		switch repeat {
-		case RepeatDaily:
-			d = d.AddDate(0, 0, 1)
-		case RepeatMonthly:
-			d = d.AddDate(0, 1, 0)
-		default:
-			d = d.AddDate(0, 0, 7)
-		}
-		if s := d.Format(dateLayout); s >= today {
-			return s
+		if due = step(due, repeat); due >= today {
+			return due
 		}
 	}
+}
+
+// step is the day a repeat comes back on after date: the next day, the same
+// weekday of the next week, or the same day of the next month, that month's
+// last where it has no such day, as the 31st in February. A date that is
+// none comes back as it is.
+func step(date, repeat string) string {
+	d, err := time.Parse(dateLayout, date)
+	if err != nil {
+		return date
+	}
+	switch repeat {
+	case RepeatDaily:
+		d = d.AddDate(0, 0, 1)
+	case RepeatMonthly:
+		first := time.Date(d.Year(), d.Month()+1, 1, 0, 0, 0, 0, time.UTC)
+		last := first.AddDate(0, 1, -1).Day()
+		d = first.AddDate(0, 0, min(d.Day(), last)-1)
+	default:
+		d = d.AddDate(0, 0, 7)
+	}
+	return d.Format(dateLayout)
+}
+
+// period names the time a date is in for a repeat: the day itself, the
+// Monday of its week, the first day of its month. They sort as the times do.
+func period(date, repeat string) string {
+	switch repeat {
+	case RepeatDaily:
+		return date
+	case RepeatMonthly:
+		return monthOf(date)
+	}
+	return mondayOf(date)
+}
+
+// current is the day a repeating task that is to do is due on now. It does
+// not stay behind in a time gone by, the day, the week or the month it
+// repeats by: there it is due as it comes back in today's, on the same
+// weekday of this week, say. What was left undone before is not kept: each
+// week has the task once, done in it or not.
+func current(due, repeat, today string) string {
+	if _, err := time.Parse(dateLayout, due); err != nil {
+		return due
+	}
+	for period(due, repeat) < period(today, repeat) {
+		due = step(due, repeat)
+	}
+	return due
+}
+
+// Coming is a day a repeating task will come back on.
+type Coming struct {
+	Date string
+	Task *Task
+}
+
+// Coming returns the days from from to to, both of them too, that the
+// repeating tasks still to do come back on after the day they are due, the
+// earlier first: what the days ahead show of them, not to be done yet.
+func (t *Todo) Coming(from, to string) []Coming {
+	t.roll()
+	if _, err := time.Parse(dateLayout, from); err != nil {
+		return nil
+	}
+	if _, err := time.Parse(dateLayout, to); err != nil {
+		return nil
+	}
+	var out []Coming
+	for _, k := range t.data.Tasks {
+		if k.Done || k.Repeat == RepeatNone {
+			continue
+		}
+		d := step(k.Due, k.Repeat)
+		if d == k.Due {
+			continue // due on no day
+		}
+		// Not step by step up to days far ahead.
+		if d < from {
+			switch k.Repeat {
+			case RepeatDaily:
+				d = from
+			case RepeatWeekly:
+				d = addDays(d, 7*((daysFrom(d, from)+6)/7))
+			}
+		}
+		for ; d <= to; d = step(d, k.Repeat) {
+			if d >= from {
+				out = append(out, Coming{Date: d, Task: k})
+			}
+		}
+	}
+	slices.SortStableFunc(out, func(a, b Coming) int { return cmp.Compare(a.Date, b.Date) })
+	return out
+}
+
+// comingBy is Coming by day.
+func (t *Todo) comingBy(from, to string) map[string][]*Task {
+	by := map[string][]*Task{}
+	for _, o := range t.Coming(from, to) {
+		by[o.Date] = append(by[o.Date], o.Task)
+	}
+	return by
 }
 
 // Remove deletes a task.
@@ -205,6 +338,19 @@ func addDays(date string, n int) string {
 		return date
 	}
 	return d.AddDate(0, 0, n).Format(dateLayout)
+}
+
+// daysFrom returns how many days b is after a.
+func daysFrom(a, b string) int {
+	x, err := time.Parse(dateLayout, a)
+	if err != nil {
+		return 0
+	}
+	y, err := time.Parse(dateLayout, b)
+	if err != nil {
+		return 0
+	}
+	return int(y.Sub(x).Hours() / 24)
 }
 
 // mondayOf returns the Monday of date's week.

@@ -108,6 +108,8 @@ func (t *Todo) monthView(c *ui.Context) {
 	_, h := c.Size()
 	cell := (h - 220) / float32(len(weeks))
 	room := max(1, int((cell-monthDay-10)/(monthChip+monthChipGap)))
+	// The days ahead show the repeating tasks that will come back on them.
+	coming := t.comingBy(weeks[0], addDays(weeks[len(weeks)-1], 6))
 
 	ui.Column(c).Label("任务列表").Grow(1).MinHeight(0).Padding(0, 20, 16, 20).Children(func() {
 		ui.Row(c).Shrink(0).Padding(0, 0, 6, 0).Children(func() {
@@ -123,7 +125,7 @@ func (t *Todo) monthView(c *ui.Context) {
 						mallow.GrooveV(c)
 					}
 					date := addDays(monday, i)
-					t.monthCell(c.Key(date), date, today, monthOf(date) == month, room)
+					t.monthCell(c.Key(date), date, today, monthOf(date) == month, room, coming[date])
 				}
 			})
 		}
@@ -131,9 +133,10 @@ func (t *Todo) monthView(c *ui.Context) {
 }
 
 // monthCell is a day of the calendar: its number, marked when it is today
-// and dim when it is of another month, and its tasks, as many as room says.
-// A right click on it adds a task due that day.
-func (t *Todo) monthCell(c *ui.Context, date, today string, ofMonth bool, room int) {
+// and dim when it is of another month, and its tasks, then the repeating
+// tasks that will come back on it, as many of them all as room says. A
+// right click on it adds a task due that day.
+func (t *Todo) monthCell(c *ui.Context, date, today string, ofMonth bool, room int, coming []*Task) {
 	tasks := t.dueOn(date)
 	day, _ := strconv.Atoi(date[8:])
 	cell := ui.Column(c).Label(dayNote(date)).Grow(1).Basis(0).MinWidth(0).Padding(6, 5).Gap(monthChipGap)
@@ -151,15 +154,19 @@ func (t *Todo) monthCell(c *ui.Context, date, today string, ofMonth bool, room i
 		num.Children(func() {
 			ui.Text(c, strconv.Itoa(day)).FontSize(12).FontWeight(600).TextColor(color)
 		})
-		shown := tasks
-		if len(shown) > room {
+		shown, ahead := tasks, coming
+		if len(tasks)+len(coming) > room {
 			// The last line counts those it leaves out.
-			shown = shown[:room-1]
+			shown = tasks[:min(len(tasks), room-1)]
+			ahead = coming[:room-1-len(shown)]
 		}
 		for _, k := range shown {
 			t.monthChip(c.Key(k.ID), k, today)
 		}
-		if rest := len(tasks) - len(shown); rest > 0 {
+		for _, k := range ahead {
+			t.comingChip(c.Key("coming:"+strconv.Itoa(k.ID)), k)
+		}
+		if rest := len(tasks) + len(coming) - len(shown) - len(ahead); rest > 0 {
 			ui.Text(c, fmt.Sprintf("还有 %d 项", rest)).Height(monthChip).PaddingX(6).FontSize(11).TextColor(mallow.Muted).SingleLine()
 		}
 	})
@@ -195,6 +202,22 @@ func (t *Todo) monthChip(c *ui.Context, k *Task, today string) {
 		t.openTask(k.ID)
 	}
 	t.taskMenu(c, chip, k)
+}
+
+// comingChip is a repeating task in the cell of a day it will come back on:
+// a line of its title, dim and on no tint, as it is not to be done yet. It
+// opens the task.
+func (t *Todo) comingChip(c *ui.Context, k *Task) {
+	chip := mallow.Plain(c, comingLabel(k)).Height(monthChip).Shrink(0).PaddingX(6).Radius(6)
+	if chip.Hovered() {
+		chip.Background(mallow.Muted.Alpha(0.14))
+	}
+	chip.Children(func() {
+		ui.Text(c, k.Title).Grow(1).MinWidth(0).FontSize(12).TextColor(mallow.Muted).SingleLine()
+	})
+	if chip.Clicked() {
+		t.openTask(k.ID)
+	}
 }
 
 // editor is the dialog a task opens in where the view has no room to unfold
