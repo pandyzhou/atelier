@@ -165,7 +165,7 @@ func TestComing(t *testing.T) {
 		"周四: (跑步)", "周五: (跑步)", "周六: 大扫除 (跑步) (交房租)", "周日: (跑步)")
 	equal(t, "last week", titlesOf(d, viewWeek, "2026-11-16"))
 	equal(t, "next 7 days", titles(d, viewNext7), "已过期: 交房租", "今天: 同步上游 跑步", "明天: (跑步)", "周五: (跑步)",
-		"周六: (跑步)", "周日: (跑步)", "周一: (跑步)", "周二: (跑步)")
+		"周六: (跑步)", "周日: (跑步)", "下周一: (跑步)", "下周二: (跑步)")
 	equal(t, "today", titles(d, viewToday), "已过期: 交房租", "今天: 同步上游 跑步", "今天完成的: 已经做完的")
 	equal(t, "all", titles(d, viewAll), "已过期: 交房租", "今天: 同步上游 跑步", "以后: 大扫除")
 	// What will come back is not counted as to do.
@@ -189,6 +189,66 @@ func TestComing(t *testing.T) {
 	}
 	if d.Coming("下周", "2026-12-09") != nil || d.Coming("2026-12-01", "") != nil {
 		t.Errorf("days that are none have tasks coming")
+	}
+}
+
+// Checked off, a repeating task is the next time's. Until that time begins it
+// shows as the times it will come back on do, dim and not to be done, in
+// every view, and is not counted as to do; then it is a task again. As the
+// user found it: the week's sync done on Wednesday, the next seven days on
+// Thursday showed next Wednesday's as left undone.
+func TestCheckedOffIsAhead(t *testing.T) {
+	now := wednesday()
+	d := newAt(store.Open(""), func() time.Time { return now })
+	weekly := d.Add(Task{Title: "同步上游", Due: "2026-11-25", Repeat: RepeatWeekly})
+	daily := d.Add(Task{Title: "跑步", Due: "2026-11-25", Repeat: RepeatDaily})
+	monthly := d.Add(Task{Title: "交房租", Due: "2026-11-25", Repeat: RepeatMonthly})
+	d.Add(Task{Title: "比赛", Due: "2026-11-28"})
+	d.SetDone(weekly, true)
+	d.SetDone(monthly, true)
+	now = now.AddDate(0, 0, 1) // Thursday the 26th
+	d.SetDone(daily, true)
+	if weekly.Due != "2026-12-02" || daily.Due != "2026-11-27" || monthly.Due != "2026-12-25" {
+		t.Fatalf("checked off, due %s, %s, %s", weekly.Due, daily.Due, monthly.Due)
+	}
+	for _, k := range []*Task{weekly, daily, monthly} {
+		if !d.Ahead(k) {
+			t.Errorf("%s, due %s, is not of a time to come", k.Title, k.Due)
+		}
+	}
+
+	equal(t, "next 7 days", titles(d, viewNext7), "今天:", "明天: (跑步)", "周六: 比赛 (跑步)", "周日: (跑步)",
+		"下周一: (跑步)", "下周二: (跑步)", "下周三: (同步上游) (跑步)")
+	if n := d.openIn(viewNext7); n != 1 {
+		t.Errorf("the next 7 days have %d tasks to do, want 1", n)
+	}
+	equal(t, "this week", titles(d, viewWeek), "周三: 同步上游 交房租", "周四: 跑步", "周五: (跑步)", "周六: 比赛 (跑步)", "周日: (跑步)")
+	equal(t, "next week", titlesOf(d, viewWeek, "2026-11-30"), "周一: (跑步)", "周二: (跑步)", "周三: (同步上游) (跑步)",
+		"周四: (跑步)", "周五: (跑步)", "周六: (跑步)", "周日: (跑步)")
+	if n := d.openIn(viewWeek); n != 1 {
+		t.Errorf("this week has %d tasks to do, want 1", n)
+	}
+	equal(t, "all", titles(d, viewAll), "今天:", "最近 7 天: 比赛 (跑步) (同步上游)", "以后: (交房租)")
+	equal(t, "today", titles(d, viewToday), "今天:", "今天完成的: 跑步")
+	// The calendar: on its day, as what comes back, not as a task to do.
+	if on := d.comingBy("2026-11-30", "2027-01-03"); len(on["2026-12-25"]) == 0 || on["2026-12-25"][0] != monthly || len(d.dueOn("2026-12-25")) != 0 {
+		t.Errorf("in the calendar on the 25th: coming %v, due %v", on["2026-12-25"], d.dueOn("2026-12-25"))
+	}
+	if n := len(d.inMonth("2026-12-01")); n != 0 {
+		t.Errorf("December counts %d tasks, want none", n)
+	}
+
+	// Monday: the week's is this week's to do; the month's is still December's.
+	now = time.Date(2026, 11, 30, 9, 0, 0, 0, time.Local)
+	equal(t, "Monday's week", titles(d, viewWeek), "周一: 跑步", "周二: (跑步)", "周三: 同步上游 (跑步)",
+		"周四: (跑步)", "周五: (跑步)", "周六: (跑步)", "周日: (跑步)")
+	if d.Ahead(weekly) || d.Ahead(daily) || !d.Ahead(monthly) {
+		t.Errorf("on Monday, ahead: weekly %v, daily %v, monthly %v", d.Ahead(weekly), d.Ahead(daily), d.Ahead(monthly))
+	}
+	// The first of December: the month's is this month's.
+	now = time.Date(2026, 12, 1, 9, 0, 0, 0, time.Local)
+	if d.Ahead(monthly) {
+		t.Errorf("on the 1st the month's task is still of a time to come")
 	}
 }
 

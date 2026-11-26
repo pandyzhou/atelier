@@ -238,6 +238,20 @@ func period(date, repeat string) string {
 	return mondayOf(date)
 }
 
+// Period is the first day of the time a repeating task is due in, the one it
+// repeats by: the day itself, the Monday of its week, the first of its month.
+func (k *Task) Period() string { return period(k.Due, k.Repeat) }
+
+// Ahead reports whether a repeating task still to do is of a time to come, a
+// day, a week or a month after today's, as it is once this time's was checked
+// off: it is not to be done before that time begins (Period). Until then it
+// shows as the times it will come back on do, and is not counted as to do.
+func (t *Todo) Ahead(k *Task) bool { return ahead(k, t.Today()) }
+
+func ahead(k *Task, today string) bool {
+	return !k.Done && k.Repeat != RepeatNone && k.Due != "" && k.Period() > period(today, k.Repeat)
+}
+
 // current is the day a repeating task that is to do is due on now. It does
 // not stay behind in a time gone by, the day, the week or the month it
 // repeats by: there it is due as it comes back in today's, on the same
@@ -298,9 +312,13 @@ func (t *Todo) Coming(from, to string) []Coming {
 	return out
 }
 
-// comingBy is Coming by day.
+// comingBy is Coming by day, after the tasks of a time to come (see Ahead) on
+// the day they are due: neither are to be done yet.
 func (t *Todo) comingBy(from, to string) map[string][]*Task {
 	by := map[string][]*Task{}
+	for _, k := range t.pick(func(k *Task) bool { return t.Ahead(k) && k.Due >= from && k.Due <= to }) {
+		by[k.Due] = append(by[k.Due], k)
+	}
 	for _, o := range t.Coming(from, to) {
 		by[o.Date] = append(by[o.Date], o.Task)
 	}

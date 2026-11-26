@@ -24,7 +24,9 @@ type group struct {
 	dated       bool // the heading says the day: rows need not
 	tasks       []*Task
 	// coming are the repeating tasks that will come back on the day the
-	// heading is of: shown after its tasks, dim, and not to be done yet.
+	// heading is of, and those of a time to come (see Ahead) due on it, or
+	// in the view of everything, due in its days: shown after its tasks,
+	// dim, and not to be done yet.
 	coming []*Task
 }
 
@@ -47,13 +49,23 @@ func (t *Todo) pick(keep func(*Task) bool) []*Task {
 // back on them: a week to come is not empty of what is done every week.
 func (t *Todo) groups(view, monday string) []group {
 	today := t.Today()
-	open := func(k *Task) bool { return !k.Done }
+	// To do: not done, and not of a time to come, which shows as coming.
+	open := func(k *Task) bool { return !k.Done && !t.Ahead(k) }
 	overdue := group{title: "已过期", tasks: t.pick(func(k *Task) bool { return open(k) && k.Due != "" && k.Due < today })}
 	doneToday := group{title: "今天完成的", tasks: t.pick(func(k *Task) bool { return k.Done && k.DoneAt == today })}
 	day := func(date string, withDone bool) group {
 		g := group{title: dayTitle(date, today), note: dayNote(date), accent: date == today, dated: true}
-		g.tasks = t.pick(func(k *Task) bool { return k.Due == date && (withDone || open(k)) })
+		g.tasks = t.pick(func(k *Task) bool { return k.Due == date && (open(k) || (withDone && k.Done)) })
 		return g
+	}
+	// The view of everything lists the tasks of a time to come where their
+	// days are, as coming.
+	listed := func(title string, in func(*Task) bool) group {
+		return group{
+			title:  title,
+			tasks:  t.pick(func(k *Task) bool { return open(k) && in(k) }),
+			coming: t.pick(func(k *Task) bool { return t.Ahead(k) && in(k) }),
+		}
 	}
 
 	var gs []group
@@ -84,8 +96,8 @@ func (t *Todo) groups(view, monday string) []group {
 		gs = []group{
 			overdue,
 			day(today, false),
-			{title: "最近 7 天", tasks: t.pick(func(k *Task) bool { return open(k) && k.Due > today && k.Due < week })},
-			{title: "以后", tasks: t.pick(func(k *Task) bool { return open(k) && k.Due >= week })},
+			listed("最近 7 天", func(k *Task) bool { return k.Due > today && k.Due < week }),
+			listed("以后", func(k *Task) bool { return k.Due >= week }),
 			{title: "没有日期", tasks: t.pick(func(k *Task) bool { return open(k) && k.Due == "" })},
 		}
 	}
@@ -93,7 +105,7 @@ func (t *Todo) groups(view, monday string) []group {
 }
 
 // dayTitle names a day: 今天, 明天, 昨天, or its weekday within a week ahead,
-// else its date.
+// 下周三 where that is in the week after this one, else its date.
 func dayTitle(date, today string) string {
 	switch date {
 	case today:
@@ -108,7 +120,11 @@ func dayTitle(date, today string) string {
 		return "没有日期"
 	}
 	if date > today && date < addDays(today, 7) {
-		return dayNames[(int(d.Weekday())+6)%7]
+		name := dayNames[(int(d.Weekday())+6)%7]
+		if mondayOf(date) != mondayOf(today) {
+			name = "下" + name
+		}
+		return name
 	}
 	return shortDate(date, today)
 }

@@ -518,7 +518,8 @@ func TestTodoWeekView(t *testing.T) {
 
 // A task that repeats shows in the weeks ahead, on the day it will come back
 // on: without a check, as it is not to be done yet, and not counted as to
-// do. It opens the task from there; checked off, the task is next week's.
+// do. It opens the task from there; checked off, the task is next week's,
+// and shows so too until that week, with no check where it opens either.
 func TestTodoRepeatAhead(t *testing.T) {
 	d, tt := newTodoTester(t)
 	add(t, tt, "Check upstream")
@@ -543,9 +544,14 @@ func TestTodoRepeatAhead(t *testing.T) {
 		t.Fatalf("checked off, the task is due %s, done %v, of %d tasks; want %s", k.Due, k.Done, len(d.Tasks()), want)
 	}
 	click(t, tt, "关闭详情")
-	if tt.HasText("正在编辑") || shown(tt, "完成Check upstream") != 1 || tt.HasText("以后的Check upstream") {
+	if tt.HasText("正在编辑") || shown(tt, "完成Check upstream") != 0 || shown(tt, "以后的Check upstream") != 1 || !tt.HasText("没有未完成的任务") {
 		t.Fatalf("next week, with the task now of it: %q", tt.Texts())
 	}
+	click(t, tt, "以后的Check upstream")
+	if !tt.HasText("正在编辑") || tt.HasText("完成这项任务") {
+		t.Fatalf("the task of next week, opened: %q", tt.Texts())
+	}
+	click(t, tt, "关闭详情")
 	click(t, tt, "下一周")
 	if shown(tt, "完成Check upstream") != 0 || shown(tt, "以后的Check upstream") != 1 {
 		t.Errorf("the week after: %q", tt.Texts())
@@ -2464,6 +2470,7 @@ func TestAssistantRepeats(t *testing.T) {
 			call("c3", "list_tasks", `{"from":"下周","to":"`+day(14)+`"}`),
 			call("c4", "list_tasks", `{"from":"`+day(-7)+`","to":"`+day(-1)+`"}`),
 			call("c5", "update_task", `{"id":1,"done":true}`),
+			call("c6", "update_task", `{"id":1,"done":true}`),
 		}},
 		{Role: llm.Assistant, Text: "好。"},
 	}
@@ -2507,7 +2514,7 @@ func TestAssistantRepeats(t *testing.T) {
 		t.Fatalf("asked %d times", len(asked))
 	}
 	got = asked[3].Messages
-	results := got[len(got)-4:]
+	results := got[len(got)-5:]
 	// The days ahead have the task as it will come back, which is said to
 	// be no task of its own; days that are none are refused; days gone by
 	// have nothing.
@@ -2521,9 +2528,13 @@ func TestAssistantRepeats(t *testing.T) {
 	if text := results[2].Text; text != "这段时间没有任务" {
 		t.Errorf("of the week before the model is told %q", text)
 	}
-	// Checked off, the task is next week's, and the model is told so.
-	if text := results[3].Text; !strings.Contains(text, "这一期记为完成") || !strings.Contains(text, "[1] "+day(7)) {
+	// Checked off, the task is next week's, and the model is told so; it is
+	// not to be checked off again before that week.
+	if text := results[3].Text; !strings.Contains(text, "这一期记为完成") || !strings.Contains(text, "[1] "+day(7)) || !strings.Contains(text, "这是下一期") {
 		t.Errorf("after checking off, the model is told %q", text)
+	}
+	if text := results[4].Text; !strings.HasPrefix(text, "没有修改：这一期已经完成了，下一期从") {
+		t.Errorf("checking off the next week's, the model is told %q", text)
 	}
 	if ks := tasks.Tasks(); len(ks) != 2 || ks[0].Done || ks[0].Due != day(7) || !ks[1].Done || ks[1].Due != day(0) {
 		t.Errorf("the tasks after checking off: %+v, %+v", ks[0], ks[1])

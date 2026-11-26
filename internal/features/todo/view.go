@@ -429,7 +429,7 @@ func (t *Todo) group(c *ui.Context, g group) {
 			}
 		}
 		for _, k := range g.coming {
-			t.comingRow(c.Key("coming:"+strconv.Itoa(k.ID)), k)
+			t.comingRow(c.Key("coming:"+strconv.Itoa(k.ID)), k, g.dated)
 		}
 		if len(g.tasks) == 0 && len(g.coming) == 0 {
 			ui.Text(c, "今天没有要做的").Padding(6, 8).FontSize(14).TextColor(mallow.Muted)
@@ -443,21 +443,37 @@ func comingLabel(k *Task) string { return "以后的" + k.Title }
 
 // comingRow is a repeating task on a day it will come back on: a row as the
 // task's, dim, with the mark of a repeat where the check will be, as it is
-// not to be done yet. It opens the task, to change what repeats.
-func (t *Todo) comingRow(c *ui.Context, k *Task) {
+// not to be done yet. It opens the task, to change what repeats. Where the
+// heading does not say the day, as in the view of everything, which shows a
+// task of a time to come on the day it is due, the row says it.
+func (t *Todo) comingRow(c *ui.Context, k *Task, dated bool) {
 	mallow.ListRow(c, false).Children(func() {
-		// As wide as a check, so that the titles stand in a line.
-		ui.Box(c).Size(26, 26).Shrink(0).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
-			mallow.GlyphRepeat(c, mallow.Muted.Alpha(0.7))
-		})
+		repeatMark(c)
 		body := mallow.Plain(c, comingLabel(k)).Grow(1).MinWidth(0).Padding(7, 4).Gap(8)
 		body.Children(func() {
 			ui.Text(c, k.Title).Grow(1).MinWidth(0).FontSize(14).TextColor(mallow.Muted)
+			if !dated && k.Due != "" {
+				ui.Text(c, dayTitle(k.Due, t.Today())).FontSize(12).TextColor(mallow.Muted).SingleLine()
+			}
 		})
 		if body.Clicked() {
 			t.openTask(k.ID)
 		}
 	})
+}
+
+// repeatMark is the mark of a repeat where a task that is not to be done yet
+// has no check: as wide as a check, so that the titles stand in a line.
+func repeatMark(c *ui.Context) ui.Element {
+	return ui.Box(c).Size(26, 26).Shrink(0).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
+		mallow.GlyphRepeat(c, mallow.Muted.Alpha(0.7))
+	})
+}
+
+// aheadNote says from when a task of a time to come (see Ahead) can be
+// checked off: "11月30日起才能勾".
+func (t *Todo) aheadNote(k *Task) string {
+	return shortDate(k.Period(), t.Today()) + "起才能勾"
 }
 
 // row is a task in the list: its check, and the rest, which opens its
@@ -509,9 +525,16 @@ func (t *Todo) detail(c *ui.Context, k *Task) {
 func (t *Todo) editing(c *ui.Context, k *Task) {
 	{
 		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-			done := k.Done
-			if mallow.CheckMark(c, &done, "完成这项任务").Changed() {
-				t.SetDone(k, done)
+			// A task of a time to come is not to be done before it: the
+			// mark of its repeat stands where the check will be.
+			if t.Ahead(k) {
+				mark := repeatMark(c).Label(t.aheadNote(k))
+				mallow.Tooltip(c, mark, t.aheadNote(k))
+			} else {
+				done := k.Done
+				if mallow.CheckMark(c, &done, "完成这项任务").Changed() {
+					t.SetDone(k, done)
+				}
 			}
 			title := mallow.TextInput(c, &t.ui.title).Placeholder("要做什么？").Label("任务标题").Grow(1).MinWidth(0).Margin(0, 8, 0, 4)
 			if title.Changed() {

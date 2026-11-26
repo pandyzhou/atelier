@@ -80,15 +80,17 @@ func monthWeeks(month string) []string {
 	return weeks
 }
 
-// inMonth returns the tasks due in a month, those still to do first.
+// inMonth returns the tasks due in a month, those still to do first: not
+// those of a time to come (see Ahead), which show as coming.
 func (t *Todo) inMonth(month string) []*Task {
 	from, to := monthOf(month), addMonths(month, 1)
-	return t.pick(func(k *Task) bool { return k.Due >= from && k.Due < to })
+	return t.pick(func(k *Task) bool { return k.Due >= from && k.Due < to && !t.Ahead(k) })
 }
 
 // dueOn returns the tasks due on a day: those still to do, then those done.
+// Those of a time to come show as coming (comingBy).
 func (t *Todo) dueOn(date string) []*Task {
-	open := t.pick(func(k *Task) bool { return k.Due == date && !k.Done })
+	open := t.pick(func(k *Task) bool { return k.Due == date && !k.Done && !t.Ahead(k) })
 	return append(open, t.pick(func(k *Task) bool { return k.Due == date && k.Done })...)
 }
 

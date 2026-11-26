@@ -828,6 +828,7 @@ func (h *Home) call(c llm.Call) string {
 		}
 		was := k.Title
 		var changes []string
+		refused := "" // why it was not checked off, as asked
 		if in.Title != nil && strings.TrimSpace(*in.Title) != k.Title {
 			k.Title = strings.TrimSpace(*in.Title)
 			changes = append(changes, "改名为“"+k.Title+"”")
@@ -851,7 +852,13 @@ func (h *Home) call(c llm.Call) string {
 			h.tasks.Changed(k)
 		}
 		result := "已修改，现在是："
-		if in.Done != nil && *in.Done != k.Done {
+		switch {
+		case in.Done == nil || *in.Done == k.Done:
+		case *in.Done && h.tasks.Ahead(k):
+			// The next time's, as the to-do page shows it: not to be
+			// checked off before that time begins.
+			refused = "这一期已经完成了，下一期从" + h.dayOf(k.Period()) + "开始，到那时才能标为完成"
+		default:
 			// Checked off, a repeating task is not done: it is the next
 			// time's, and a copy of it is.
 			if *in.Done && k.Repeat != todo.RepeatNone {
@@ -865,9 +872,15 @@ func (h *Home) call(c llm.Call) string {
 			}
 		}
 		if len(changes) == 0 {
+			if refused != "" {
+				return "没有修改：" + refused
+			}
 			return "没有要改的：任务已经是这样了"
 		}
 		did("已修改任务：" + was + " · " + strings.Join(changes, "，"))
+		if refused != "" {
+			result = "已修改（但没有标为完成：" + refused + "），现在是："
+		}
 		return result + h.taskLine(k)
 	case "delete_task":
 		var in struct{ ID int }
@@ -1224,6 +1237,9 @@ func (h *Home) taskLine(k *todo.Task) string {
 	case todo.RepeatMonthly:
 		b.WriteString("（每月重复）")
 	}
+	if h.tasks.Ahead(k) {
+		b.WriteString("（这一期已完成，这是下一期，从" + h.dayOf(k.Period()) + "开始）")
+	}
 	if k.Done {
 		b.WriteString("（已完成）")
 	}
@@ -1288,7 +1304,7 @@ func (h *Home) system() string {
 - 添加前信息不全（比如课程没说星期几、第几节）就先问清楚，不要猜。
 - 添加成功后用一句话确认。工具说失败时，把原因告诉用户。
 - 任务可以修改、标为完成和删除，课程可以修改和删除，用前面方括号里的 id 指明是哪一条；回答用户时不要提 id。
-- 重复的任务只有一条，日期是当前这一期的。标为完成后，留下一条已完成的记录，任务本身挪到下一期：每天的是第二天，每周的是下周的同一个星期几，每月的是下个月的同一号。这一期没做也不会卡住：到了新的一天、新的一周（周一起算）、新的一个月，它自动换成那一期的，之前没做的不保留。待办页的“最近 7 天”“按周”和月历会把以后各期提前显示出来，颜色淡一些，到那一期之前不能勾；要查以后哪天有，用 list_tasks。
+- 重复的任务只有一条，日期是当前这一期的。标为完成后，留下一条已完成的记录，任务本身挪到下一期：每天的是第二天，每周的是下周的同一个星期几，每月的是下个月的同一号。下一期开始之前，它不算未完成，也不能标为完成，清单里会注明“这一期已完成，这是下一期”。这一期没做也不会卡住：到了新的一天、新的一周（周一起算）、新的一个月，它自动换成那一期的，之前没做的不保留。待办页会把下一期和以后各期提前显示在它们的日子下面，颜色淡一些，到那一期之前不能勾；要查以后哪天有，用 list_tasks。
 - 添加重复的任务时，用户没说从哪天起就从今天算起，确认时说清楚是每周几或每月几号。
 - “第几周”按周一到周日为一周来算，和待办页“按周”的标题一致；<context> 里写着今天是第几周。
 - 用户问应用为什么这样显示、某个功能怎么运作时，按这里写的和工具查到的回答；这里没写的就直说不清楚，不要猜，更不要为了验证去改用户的数据（比如把没做的任务标为完成再改回来）。没做的事不要建议标为完成。
