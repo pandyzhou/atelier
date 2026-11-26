@@ -356,9 +356,11 @@ var (
 	typed    = regexp.MustCompile(`(?i)</?(code|kbd|samp|tt)\b[^>]*>`)
 	breaks   = regexp.MustCompile(`(?i)<br\b[^>]*>`)
 	item     = regexp.MustCompile(`(?i)<li\b[^>]*>`)
-	parted   = regexp.MustCompile(`(?i)</?(p|div|center|details|summary|section|article|header|footer|table|thead|tbody|tr|ul|ol|blockquote|figure|figcaption)\b[^>]*>`)
-	dropped  = regexp.MustCompile(`(?i)</?(span|picture|font|sub|sup|small|big|u|ins|del|s|strike|source|td|th|li|nav|main|a|video|audio|iframe|hr|wbr|abbr|mark|label|svg|path|g)\b[^>]*>`)
-	blank    = regexp.MustCompile(`\n{3,}`)
+	// cellEnd ends a cell of a table, and the line it ends with it.
+	cellEnd = regexp.MustCompile(`(?i)</t[dh]>[ \t]*\n?`)
+	parted  = regexp.MustCompile(`(?i)</?(p|div|center|details|summary|section|article|header|footer|table|thead|tbody|tr|ul|ol|blockquote|figure|figcaption)\b[^>]*>`)
+	dropped = regexp.MustCompile(`(?i)</?(span|picture|font|sub|sup|small|big|u|ins|del|s|strike|source|td|th|li|nav|main|a|video|audio|iframe|hr|wbr|abbr|mark|label|svg|path|g)\b[^>]*>`)
+	blank   = regexp.MustCompile(`\n{3,}`)
 	// alone is a tag that goes without a trace, on a line of its own.
 	alone = regexp.MustCompile(`(?im)^[ \t]*</?(span|picture|font|sub|sup|small|big|source|nav|main|svg|path|g)\b[^>\n]*>[ \t]*\n`)
 )
@@ -399,13 +401,16 @@ func Tidy(src string, dark bool) string {
 	// Between the fences of code blocks, and outside the code in a line.
 	inCode, at := false, 0
 	prose := func(s string) {
+		s = unindented(s)
+		var b strings.Builder
 		last := 0
 		for _, m := range code.FindAllStringIndex(s, -1) {
-			out.WriteString(tidy(s[last:m[0]], dark))
-			out.WriteString(s[m[0]:m[1]])
+			b.WriteString(tidy(s[last:m[0]], dark))
+			b.WriteString(s[m[0]:m[1]])
 			last = m[1]
 		}
-		out.WriteString(tidy(s[last:], dark))
+		b.WriteString(tidy(s[last:], dark))
+		out.WriteString(apart(b.String()))
 	}
 	for _, m := range fence.FindAllStringIndex(src, -1) {
 		if !inCode {
@@ -421,6 +426,84 @@ func Tidy(src string, dark bool) string {
 		prose(src[at:])
 	}
 	return strings.TrimSpace(blank.ReplaceAllString(out.String(), "\n\n"))
+}
+
+// forPage returns an address of a picture or a link without the mark GitHub
+// goes by to show it on dark pages only, or on light ones only, and whether
+// it shows on the page that is dark or not.
+func forPage(address string, dark bool) (string, bool) {
+	for mark, forDark := range map[string]bool{"#gh-dark-mode-only": true, "#gh-light-mode-only": false} {
+		if rest, ok := strings.CutSuffix(address, mark); ok {
+			return rest, forDark == dark
+		}
+	}
+	return address, true
+}
+
+// htmlLine is a line that begins with a tag: it begins a block of HTML.
+var htmlLine = regexp.MustCompile(`^</?[A-Za-z]`)
+
+// unindented is text that holds no block of code between fences with the
+// lines of its blocks of HTML at the left. In HTML their room means nothing,
+// but in Markdown, once the tags are gone, a line indented by four would be
+// code, as the cells of a table written a row to a line. A block runs from a
+// line that begins with a tag to a blank line, as GitHub reads it; a line
+// indented by four after a blank one begins code even so.
+func unindented(s string) string {
+	lines := strings.Split(s, "\n")
+	in, blankBefore := false, true
+	for i, l := range lines {
+		trimmed := strings.TrimLeft(l, " \t")
+		switch {
+		case trimmed == "":
+			in = false
+		case !in && htmlLine.MatchString(trimmed) && !(blankBefore && len(l)-len(trimmed) >= 4):
+			in = true
+		}
+		if in {
+			lines[i] = trimmed
+		}
+		blankBefore = trimmed == ""
+	}
+	return strings.Join(lines, "\n")
+}
+
+// pictureLine is a line of pictures alone, each by itself or the whole of a
+// link, as tidy writes them.
+var pictureLine = regexp.MustCompile(`^(?:(?:!\[[^\]\n]*\]\([^)\s]*\)|\[!\[[^\]\n]*\]\([^)\s]*\)\]\([^)\s]*\))[ \t]*)+$`)
+
+// spacer is what a line that only makes room between pictures holds.
+var spacer = strings.NewReplacer("&nbsp;", "", "&#160;", "", "&ensp;", "", "&emsp;", "")
+
+// apart sets each line of pictures alone apart from the text above and below
+// it, as a paragraph of its own: what shows a README draws the pictures of a
+// paragraph that has nothing else, and of one with text only what they are
+// of, as when a cell of a table has a logo over a name. Lines of pictures
+// next to each other stay together, a row of them, and so do those with a
+// line between them that only makes room, as &nbsp;.
+func apart(s string) string {
+	lines := strings.Split(s, "\n")
+	pictures := func(i int) bool {
+		return i >= 0 && i < len(lines) && pictureLine.MatchString(strings.TrimSpace(spacer.Replace(lines[i])))
+	}
+	text := func(i int) bool {
+		return i >= 0 && i < len(lines) && strings.TrimSpace(spacer.Replace(lines[i])) != "" && !pictures(i)
+	}
+	out := make([]string, 0, len(lines))
+	for i, l := range lines {
+		if !pictures(i) {
+			out = append(out, l)
+			continue
+		}
+		if text(i - 1) {
+			out = append(out, "")
+		}
+		out = append(out, strings.TrimRight(l, " \t"))
+		if text(i + 1) {
+			out = append(out, "")
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // What tidy reads of pictures made for one palette, and of what is centered.
@@ -464,17 +547,8 @@ func tidy(s string, dark bool) string {
 	// paragraph around it in two.
 	s = alone.ReplaceAllString(s, "")
 	s = image.ReplaceAllStringFunc(s, func(tag string) string {
-		src := attribute(tag, "src")
-		// GitHub shows a picture whose address ends so on dark pages only,
-		// or on light ones only.
-		for mark, forDark := range map[string]bool{"#gh-dark-mode-only": true, "#gh-light-mode-only": false} {
-			if rest, ok := strings.CutSuffix(src, mark); ok {
-				if src = rest; forDark != dark {
-					return ""
-				}
-			}
-		}
-		if src == "" {
+		src, shows := forPage(attribute(tag, "src"), dark)
+		if !shows || src == "" {
 			return ""
 		}
 		alt := strings.NewReplacer("[", "", "]", "", "\n", " ").Replace(attribute(tag, "alt"))
@@ -487,7 +561,11 @@ func tidy(s string, dark bool) string {
 	})
 	s = anchor.ReplaceAllStringFunc(s, func(tag string) string {
 		m := anchor.FindStringSubmatch(tag)
-		href, inner := attribute(m[1], "href"), strings.TrimSpace(m[2])
+		href, shows := forPage(attribute(m[1], "href"), dark)
+		inner := strings.TrimSpace(m[2])
+		if !shows {
+			return "" // and what it holds, as a picture made for the other page
+		}
 		if href == "" || inner == "" {
 			return inner
 		}
@@ -501,6 +579,9 @@ func tidy(s string, dark bool) string {
 	s = emphasis.ReplaceAllString(s, "*")
 	s = typed.ReplaceAllString(s, "`")
 	s = breaks.ReplaceAllString(s, "  \n")
+	// A row of a table is a paragraph, a line to each of its cells: they
+	// would run on into each other, and pictures stay side by side.
+	s = cellEnd.ReplaceAllString(s, "  \n")
 	s = item.ReplaceAllString(s, "\n- ")
 	s = parted.ReplaceAllString(s, "\n\n")
 	s = dropped.ReplaceAllString(s, "")

@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/egoist/mygo/ui/markdown/parser"
 )
 
 // page is GitHub's page of trending repositories, cut down to what is read
@@ -81,8 +83,10 @@ func TestTidy(t *testing.T) {
 		}
 		return b.String()
 	}
+	// A line of pictures is a paragraph apart from the text under it, which
+	// would show it as what it is of.
 	want := "[centered]\n# ![Logo](docs/logo%20dark.png#shown-at=120x0) Tiny\n---\n" +
-		"[centered]\n[![CI](https://img.example.com/ci.svg)](https://example.com/ci)\n[Read the **guide**](docs/guide.md)\n---\n" +
+		"[centered]\n[![CI](https://img.example.com/ci.svg)](https://example.com/ci)\n---\n[centered]\n[Read the **guide**](docs/guide.md)\n---\n" +
 		"Use `Map<K, V>` and `Ctrl`, not this.\n\n" +
 		"```html\n<p align=\"center\"><img src=\"x.png\"></p>\n```\n\n" +
 		"More\n\n- one\n---\n" +
@@ -94,6 +98,87 @@ func TestTidy(t *testing.T) {
 	dark := strings.NewReplacer("b.svg#shown-at=0x28", "b-dark.svg#shown-at=0x28", "sun.png", "moon.png").Replace(want)
 	if got := show(true); got != dark {
 		t.Errorf("for a dark page, tidied to:\n%s\n\nwant:\n%s", got, dark)
+	}
+}
+
+// TestTidyLayout checks what is made of the layouts READMEs build with HTML.
+// A table written a row to a line, its cells indented, is no code, and each
+// cell is a line of the row's paragraph, not run on into the next, as the
+// README of n8n-io/nod showed it; a picture over its caption is a paragraph
+// apart, which shows it, and pictures with room between them stay a row;
+// code indented after a blank line stays code; and the text around code in a
+// line keeps its spaces.
+func TestTidyLayout(t *testing.T) {
+	src := "<table>\n  <tr>\n    <td width=\"50%\"><strong>Every note.</strong><br />See each one.</td>\n" +
+		"    <td width=\"50%\"><strong>Drafts.</strong><br />Learns your style.</td>\n  </tr>\n  <tr>\n" +
+		"    <td><strong>Tell it once.</strong><br />It uses the new fact.</td>\n  </tr>\n</table>\n\n" +
+		"<table><tr>\n  <td><img src=\"logo.svg\" width=\"40\" alt=\"Acme logo\"><br><b>Acme</b><br><a href=\"https://acme.dev\">Docs</a></td>\n" +
+		"  <td><img src=\"a.png\" alt=\"A\">&nbsp;<img src=\"b.png\" alt=\"B\"></td>\n</tr></table>\n\n" +
+		"Run it:\n\n    <script src=\"x.js\"></script>\n\n" +
+		"Use `x` <b>now</b>.\n"
+	text := Tidy(src, false)
+	for _, want := range []string{
+		"See each one.  \n**Drafts.**  \nLearns your style.",
+		"**Tell it once.**  \nIt uses the new fact.",
+		"Use `x` **now**.",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("no %q in:\n%s", want, text)
+		}
+	}
+	var code, pictures, captions []string
+	doc := parser.Parse(text)
+	for b := 0; b < doc.Len(); b++ {
+		blk := doc.Block(b)
+		switch blk.Kind {
+		case parser.CodeBlock:
+			code = append(code, strings.TrimSpace(text[blk.Start:blk.End]))
+		case parser.Paragraph:
+			alone, alts := true, ""
+			in := doc.Inlines(b)
+			for k := 0; k < len(in); k = in[k].Next {
+				switch in[k].Kind {
+				case parser.Image:
+					alts += parser.PlainText(in[k+1:in[k].Next]) + " "
+				case parser.SoftBreak, parser.LineBreak:
+				case parser.Text:
+					alone = alone && strings.TrimSpace(in[k].Text) == ""
+				default:
+					alone = false
+				}
+			}
+			if alts != "" && alone {
+				pictures = append(pictures, strings.TrimSpace(alts))
+			}
+			if strings.Contains(text[blk.Start:blk.End], "Acme**") {
+				captions = append(captions, text[blk.Start:blk.End])
+			}
+		}
+	}
+	if len(code) != 1 || code[0] != `<script src="x.js"></script>` {
+		t.Errorf("code: %q", code)
+	}
+	if len(pictures) != 2 || pictures[0] != "Acme logo" || pictures[1] != "A B" {
+		t.Errorf("paragraphs of pictures alone: %q", pictures)
+	}
+	if len(captions) != 1 || !strings.Contains(captions[0], "[Docs](https://acme.dev)") {
+		t.Errorf("the caption: %q", captions)
+	}
+}
+
+// TestTidyForPage checks that a picture made for dark pages, or for light
+// ones, shows on those alone, whether its own address says so or that of the
+// link it is in, as the README of n8n-io/nod has it.
+func TestTidyForPage(t *testing.T) {
+	src := "<p align=\"center\">\n  <a href=\"https://x.dev#gh-dark-mode-only\"><img src=\"hero-dark.png\" alt=\"Hero\"></a>\n" +
+		"  <a href=\"https://x.dev#gh-light-mode-only\"><img src=\"hero.png\" alt=\"Hero\"></a>\n</p>\n"
+	for dark, want := range map[bool]string{
+		true:  "[![Hero](hero-dark.png)](https://x.dev)",
+		false: "[![Hero](hero.png)](https://x.dev)",
+	} {
+		if parts := Parts(Tidy(src, dark)); len(parts) != 1 || parts[0].text != want {
+			t.Errorf("on a page dark %v: %+v, want %q", dark, parts, want)
+		}
 	}
 }
 
