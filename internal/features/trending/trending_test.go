@@ -180,6 +180,43 @@ func TestTidyForPage(t *testing.T) {
 			t.Errorf("on a page dark %v: %+v, want %q", dark, parts, want)
 		}
 	}
+	// Buttons each made for both pages, a line to each, stay a row: what
+	// was left out leaves no blank line that would part them. So does a
+	// link that held only a picture made for the other page.
+	buttons := "<p align=\"center\">\n" +
+		"  <a href=\"m.dmg#gh-dark-mode-only\"><img src=\"mac-dark.png\" alt=\"Mac\"></a>\n" +
+		"  <a href=\"m.dmg#gh-light-mode-only\"><img src=\"mac.png\" alt=\"Mac\"></a>\n" +
+		"  <a href=\"w.exe\"><img src=\"win-dark.png#gh-dark-mode-only\" alt=\"Win\"></a>\n" +
+		"  <a href=\"w.exe\"><img src=\"win.png#gh-light-mode-only\" alt=\"Win\"></a>\n</p>\n\nNext."
+	for dark, want := range map[bool]string{
+		true:  "[![Mac](mac-dark.png)](m.dmg)\n[![Win](win-dark.png)](w.exe)",
+		false: "[![Mac](mac.png)](m.dmg)\n[![Win](win.png)](w.exe)",
+	} {
+		if parts := Parts(Tidy(buttons, dark)); len(parts) != 2 || parts[0].text != want || parts[1].text != "Next." {
+			t.Errorf("buttons on a page dark %v: %+v, want %q", dark, parts, want)
+		}
+	}
+}
+
+// TestPictureSize checks the size a picture is shown at, as its README gives
+// it: tidy writes it after the address, and what loads the picture reads it.
+func TestPictureSize(t *testing.T) {
+	text := Tidy(`<img src="mac.webp" width="219" alt="Mac"> <img src="badge.svg" height="20"> <img src="wide.png" width="100%">`, true)
+	want := "![Mac](mac.webp#shown-at=219x0) ![](badge.svg#shown-at=0x20) ![](wide.png)"
+	if text != want {
+		t.Fatalf("tidied to %q, want %q", text, want)
+	}
+	for _, c := range []struct {
+		address string
+		w, h    float32
+	}{{"mac.webp#shown-at=219x0", 219, 0}, {"badge.svg#shown-at=0x20", 0, 20}, {"wide.png", 0, 0}} {
+		if w, h := pictureSize(c.address); w != c.w || h != c.h {
+			t.Errorf("%s shows at %vx%v, want %vx%v", c.address, w, h, c.w, c.h)
+		}
+	}
+	if w, h, rest := shownAt("docs/mac.webp#shown-at=219x0"); w != 219 || h != 0 || rest != "docs/mac.webp" {
+		t.Errorf("read %d, %d, %q", w, h, rest)
+	}
 }
 
 // TestAddresses checks where the pictures and the links of a README go:

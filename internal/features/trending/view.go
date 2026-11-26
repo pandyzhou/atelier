@@ -268,6 +268,8 @@ func (t *Trending) page(c *ui.Context, r Repo) {
 		t.ui.docs[r.Name] = doc
 	}
 	doc.LoadImage = func(address string) (ui.ImageSource, error) { return t.loadPicture(r.Name, file, address) }
+	// They show at the size their README gives them, where it does.
+	doc.Size = pictureSize
 	doc.OnLink = func(address string) {
 		if strings.HasPrefix(address, "#") {
 			return

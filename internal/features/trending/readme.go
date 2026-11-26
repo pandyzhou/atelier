@@ -264,13 +264,27 @@ func picture(name, file, address string) string {
 // maxPicture is the largest picture of a README that is loaded.
 const maxPicture = 8 << 20
 
-// loadPicture loads a picture of the README of the repository that shows.
-func (t *Trending) loadPicture(name, file, address string) (ui.ImageSource, error) {
-	width, height := 0, 0
+// shownAt reads the size a picture's README gives it from its address, as
+// tidy wrote it there (sized): its width and height in DIPs, 0 for one left
+// open, and the address without them.
+func shownAt(address string) (width, height int, rest string) {
 	if i := strings.Index(address, sized); i >= 0 {
 		fmt.Sscanf(address[i+len(sized):], "%dx%d", &width, &height)
 		address = address[:i]
 	}
+	return width, height, address
+}
+
+// pictureSize is the size a picture of a README shows at, in DIPs, from its
+// address: the one its README gives, 0 for a side left open.
+func pictureSize(address string) (float32, float32) {
+	w, h, _ := shownAt(address)
+	return float32(w), float32(h)
+}
+
+// loadPicture loads a picture of the README of the repository that shows.
+func (t *Trending) loadPicture(name, file, address string) (ui.ImageSource, error) {
+	width, height, address := shownAt(address)
 	address = picture(name, file, address)
 	if !strings.HasPrefix(address, "https://") && !strings.HasPrefix(address, "http://") {
 		return nil, errors.New("not on the web")
@@ -307,10 +321,11 @@ func (t *Trending) loadPicture(name, file, address string) (ui.ImageSource, erro
 			return sized, nil
 		}
 	case *ui.Bitmap:
-		// A small one, as an icon in a row of them, is made that small.
-		// A large one shows as it is, at most as wide as the page: made
-		// smaller here it would show blurred where the screen has more
-		// pixels than the page counts.
+		// A small one, as an icon in a row of them, is made that small. A
+		// large one is kept as it is: the page shows it at the size its
+		// README gives (pictureSize), drawn from all its pixels, which made
+		// smaller here would show blurred where the screen has more pixels
+		// than the page counts.
 		if float32(width) < w && max(width, height) <= smallPicture {
 			return ui.DecodeBitmapScaled(data, max(width, height))
 		}
@@ -396,7 +411,7 @@ func attribute(in, name string) string {
 // for dark pages and one for light ones, it keeps the one for dark's.
 func Tidy(src string, dark bool) string {
 	src = strings.ReplaceAll(src, "\r\n", "\n")
-	src = strings.NewReplacer(centerStart, "", centerEnd, "").Replace(src)
+	src = strings.NewReplacer(centerStart, "", centerEnd, "", gone, "").Replace(src)
 	var out strings.Builder
 	// Between the fences of code blocks, and outside the code in a line.
 	inCode, at := false, 0
@@ -410,7 +425,7 @@ func Tidy(src string, dark bool) string {
 			last = m[1]
 		}
 		b.WriteString(tidy(s[last:], dark))
-		out.WriteString(apart(b.String()))
+		out.WriteString(apart(unmarked(b.String())))
 	}
 	for _, m := range fence.FindAllStringIndex(src, -1) {
 		if !inCode {
@@ -426,6 +441,20 @@ func Tidy(src string, dark bool) string {
 		prose(src[at:])
 	}
 	return strings.TrimSpace(blank.ReplaceAllString(out.String(), "\n\n"))
+}
+
+// gone marks where tidy left out a picture or a link made for the other
+// page, dark or light: see unmarked.
+const gone = ""
+
+// goneLine is a line that held only what was left out.
+var goneLine = regexp.MustCompile(`(?m)^[ \t]*(?:` + gone + `[ \t]*)+\n`)
+
+// unmarked is text tidy made without the marks of what it left out: a line
+// that held nothing else goes as well, as left empty it would part the
+// paragraph around it in two, as a row of buttons each made for both pages.
+func unmarked(s string) string {
+	return strings.ReplaceAll(goneLine.ReplaceAllString(s, ""), gone, "")
 }
 
 // forPage returns an address of a picture or a link without the mark GitHub
@@ -548,7 +577,10 @@ func tidy(s string, dark bool) string {
 	s = alone.ReplaceAllString(s, "")
 	s = image.ReplaceAllStringFunc(s, func(tag string) string {
 		src, shows := forPage(attribute(tag, "src"), dark)
-		if !shows || src == "" {
+		if !shows {
+			return gone
+		}
+		if src == "" {
 			return ""
 		}
 		alt := strings.NewReplacer("[", "", "]", "", "\n", " ").Replace(attribute(tag, "alt"))
@@ -563,8 +595,10 @@ func tidy(s string, dark bool) string {
 		m := anchor.FindStringSubmatch(tag)
 		href, shows := forPage(attribute(m[1], "href"), dark)
 		inner := strings.TrimSpace(m[2])
-		if !shows {
-			return "" // and what it holds, as a picture made for the other page
+		// A link made for the other page goes with what it holds, as does
+		// one that held only a picture made for it.
+		if !shows || (inner != "" && strings.TrimSpace(strings.ReplaceAll(inner, gone, "")) == "") {
+			return gone
 		}
 		if href == "" || inner == "" {
 			return inner
